@@ -204,6 +204,81 @@ Sets `current_lat`, `current_lng`, and `location_updated_at` (from the database'
 
 ---
 
+## Zones and areas (M04)
+
+Geographic configuration: `zones` are the top-level unit, `areas` belong to
+exactly one zone. Every endpoint below is **ADMIN only** — see
+`docs/zone-management.md` for the full design (hierarchy, resolution,
+INTRA/INTER, why there's no DELETE).
+
+### `POST /api/v1/zones`
+
+**Auth**: required, **ADMIN only**. **Purpose**: create a zone.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/zones \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"North"}'
+```
+
+```json
+{ "id": "1f2e...", "name": "North", "active": true, "created_at": "2026-08-20T16:00:00Z" }
+```
+
+**Errors**: `401`, `403`, `409` (name already taken), `422` (empty/whitespace name, or name over 100 characters).
+
+### `GET /api/v1/zones`
+
+**Auth**: required, **ADMIN only**. **Purpose**: list every zone, active or not — no filter for "active only" exists yet.
+
+```bash
+curl http://localhost:8080/api/v1/zones -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+### `GET /api/v1/zones/{id}`
+
+**Auth**: required, **ADMIN only**. **Errors**: `404` if unknown.
+
+### `PUT /api/v1/zones/{id}`
+
+**Auth**: required, **ADMIN only**. **Purpose**: rename a zone and/or toggle `active`. This is also how a zone is activated/deactivated — there is no separate endpoint for that. `name` is always required (send the zone's current name back if you only mean to change `active`); `active` is optional — omitting it leaves the current value unchanged.
+
+```bash
+curl -X PUT http://localhost:8080/api/v1/zones/$ZONE_ID \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"North","active":false}'
+```
+
+**Errors**: `401`, `403`, `404`, `409` (renamed to a name already taken), `422`.
+
+### `POST /api/v1/zones/{zoneID}/areas`
+
+**Auth**: required, **ADMIN only**. **Purpose**: create an area under the zone named in the URL. The request body has no `zone_id` field — sending one is rejected outright (422, unknown field), the same fail-closed pattern as agent creation having no `role` field. The zone in the path is the only source of the relationship.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/zones/$ZONE_ID/areas \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"Downtown"}'
+```
+
+```json
+{ "id": "9a1b...", "name": "Downtown", "zone_id": "1f2e...", "created_at": "2026-08-20T16:05:00Z" }
+```
+
+**Errors**: `401`, `403`, `404` (unknown zone), `409` (an area with this name already exists *in this zone* — the same name is fine in a different zone), `422`.
+
+### `GET /api/v1/zones/{zoneID}/areas`
+
+**Auth**: required, **ADMIN only**. **Purpose**: list the areas belonging to one zone. `404` if the zone itself doesn't exist (distinct from `200` with an empty array, which means the zone exists but has no areas yet — the frontend needs that distinction for its empty state).
+
+### `PUT /api/v1/zones/{zoneID}/areas/{areaID}`
+
+**Auth**: required, **ADMIN only**. **Purpose**: rename an area. Moving an area to a different zone is not supported — this endpoint only renames. If `{areaID}` exists but belongs to a different zone than `{zoneID}` names, the response is `404` (treated identically to "doesn't exist," not a more specific error, so this endpoint never confirms an area's existence under the wrong zone).
+
+**Errors**: `401`, `403`, `404`, `409` (name taken within the zone), `422`.
+
+---
+
 ## What's not here yet
 
-Zones, rate cards, orders, tracking, assignment, rescheduling, notifications, and dashboards — M04 through M12. This file grows with each module.
+Rate cards, orders, tracking, assignment, rescheduling, notifications, and dashboards — M05 through M12. This file grows with each module.

@@ -10,21 +10,22 @@ with a React + TypeScript frontend, structured as a modular monolith.
 
 ## Current Status
 
-**M03 — User & Agent Management.** The backend now also has a
-`delivery_agents` table, admin-only agent provisioning, agent
-availability/location management, and profile editing (`PUT
-/users/me`). The frontend has a real profile-edit form, an admin agent
-management screen, and an agent operational screen. **No other business
-functionality exists yet** — no zones, no rates, no orders, no assignment
-algorithm, no tracking. Those arrive in M04 through M12, in order, each
-expanding this README and `docs/` as they land.
+**M04 — Zone Management.** The backend now also has `zones` and `areas`
+tables, admin-only zone/area CRUD, and a deterministic
+address→area→zone resolution service with INTRA/INTER-zone
+classification. `delivery_agents.current_zone_id`'s foreign key
+(deliberately deferred in M03) is now complete. The frontend has an
+admin zone/area management screen. **No other business functionality
+exists yet** — no rates, no orders, no assignment algorithm, no
+tracking. Those arrive in M05 through M12, in order, each expanding this
+README and `docs/` as they land.
 
 | Module | Status |
 |---|---|
 | M01 — Foundation & Infrastructure | ✅ Done |
 | M02 — Authentication & RBAC | ✅ Done |
 | M03 — User & Agent Management | ✅ Done |
-| M04 — Zone Management | Not started |
+| M04 — Zone Management | ✅ Done |
 | M05 — Rate Configuration | Not started |
 | M06 — Rate Calculation Engine | Not started |
 | M07 — Order Management | Not started |
@@ -253,6 +254,40 @@ verify it (`TestUpdateAvailabilityHandler_AnotherAgentForbidden`,
 `TestUpdateLocationHandler_AnotherAgentForbidden`, and the integration-level
 `TestCreateAgent_DeliveryAgentCannotCreateAnotherAgent`).
 
+## Zones
+
+Full design detail (hierarchy, schema, why there's no DELETE, address
+resolution and why it isn't geocoding, INTRA/INTER, inactive-zone
+behavior, completing the `current_zone_id` FK) is in
+[`docs/zone-management.md`](docs/zone-management.md); endpoint examples
+are in [`docs/api.md`](docs/api.md). Short version:
+
+- **`POST /api/v1/zones`**, **`GET /api/v1/zones`**, **`GET
+  /api/v1/zones/{id}`**, **`PUT /api/v1/zones/{id}`** (all ADMIN only) —
+  zone CRUD. `PUT` is also how a zone is activated/deactivated; there is
+  no separate endpoint.
+- **`POST /api/v1/zones/{zoneID}/areas`**, **`GET
+  /api/v1/zones/{zoneID}/areas`**, **`PUT
+  /api/v1/zones/{zoneID}/areas/{areaID}`** (all ADMIN only) — areas are
+  always created and addressed under their zone's URL; the request body
+  has no `zone_id` field, so a client cannot redirect an area to a
+  different zone than the path names.
+- **Deletion**: neither zones nor areas can be deleted — only zones can
+  be deactivated (`active = false`). Zones and areas are configuration
+  later modules will reference; physical deletion risks orphaning those
+  references.
+- **Resolution**: `internal/zones.ResolvePickupDrop` resolves a
+  pickup/drop area pair to their zones and classifies the pair as
+  `INTRA` (same zone) or `INTER` (different zones) — comparing zone IDs,
+  never names. No HTTP endpoint exposes this in M04; it's a Go-level
+  service M06's rate engine and M07's order flow are expected to call
+  directly. Resolving an unknown area fails explicitly; resolving
+  through a deactivated zone fails explicitly too (`ErrZoneInactive`) —
+  the resolver never guesses a zone or silently returns `INTRA`.
+- **`delivery_agents.current_zone_id`** now has a real foreign key to
+  `zones.id` — the constraint M03's own migration comment said would
+  land in M04.
+
 ## Repository Structure
 
 ```text
@@ -274,14 +309,15 @@ last-mile-delivery-tracker/
 │   │   ├── auth/                 # password hashing, JWT, RBAC middleware, register/login/GET+PUT me handlers, demo seed (M02, M03)
 │   │   ├── users/                # User domain model + Postgres repository, incl. Update (M02, M03)
 │   │   ├── agents/               # delivery_agents domain, repository (transactional creation), handlers, routes (M03)
-│   │   ├── zones/                # M04 — reserved, empty
+│   │   ├── zones/                # zones/areas domain, repository, resolution service, handlers, routes (M04)
 │   │   ├── rates/                # M05/M06 — reserved, empty
 │   │   ├── orders/                # M07 — reserved, empty
 │   │   ├── tracking/              # M08 — reserved, empty
 │   │   ├── assignment/            # M09 — reserved, empty
 │   │   ├── rescheduling/          # M10 — reserved, empty
 │   │   └── notifications/         # M11 — reserved, empty
-│   ├── migrations/                # embedded SQL migrations (go:embed): 0001 users (M02), 0002 delivery_agents (M03)
+│   ├── migrations/                # embedded SQL migrations (go:embed): 0001 users (M02), 0002 delivery_agents (M03),
+│   │                               #   0003 zones, 0004 areas, 0005 delivery_agents.current_zone_id FK (M04)
 │   └── tests/
 │       ├── unit/                  # convention note — unit tests are co-located with source
 │       ├── integration/           # DB-backed integration tests (build tag: integration)
@@ -293,18 +329,19 @@ last-mile-delivery-tracker/
 │   └── src/
 │       ├── components/            # Layout (role-aware nav), StatusBadge, ErrorBanner, ProtectedRoute (+roles)
 │       ├── pages/                 # Home, LoginPage, RegisterPage, Account (profile edit);
-│       │                          #   admin/AgentsPage, agent/OperationsPage (M03)
-│       ├── services/              # api.ts (+apiPut), health.ts, auth.ts (+updateProfile), agents.ts (M03)
+│       │                          #   admin/AgentsPage, agent/OperationsPage (M03); admin/ZonesPage (M04)
+│       ├── services/              # api.ts (+apiPut), health.ts, auth.ts (+updateProfile), agents.ts (M03), zones.ts (M04)
 │       ├── hooks/                 # useHealthCheck, useAuth
 │       ├── contexts/              # AuthContext.tsx (provider) + auth-context.ts (context object)
-│       ├── types/                 # HealthResponse, auth.ts (+ProfileUpdateInput), agent.ts (M03)
+│       ├── types/                 # HealthResponse, auth.ts (+ProfileUpdateInput), agent.ts (M03), zone.ts (M04)
 │       ├── test/                  # setup.ts — React Testing Library cleanup
 │       └── utils/                 # reserved — no shared utility yet
 │
 ├── docs/                          # detailed per-module docs, written as each module lands
 │   ├── api.md                     # full endpoint reference, every route so far
 │   ├── authentication.md          # roles, schema, JWT, RBAC, token-storage tradeoff (M02)
-│   └── user-agent-management.md   # delivery_agents schema, IDOR protection, M09 notes (M03)
+│   ├── user-agent-management.md   # delivery_agents schema, IDOR protection, M09 notes (M03)
+│   └── zone-management.md         # zones/areas schema, resolution, INTRA/INTER, current_zone_id FK (M04)
 │
 └── scripts/
     └── seed/                      # reserved for later modules' larger seed data (M02's demo users seed from main.go instead — see its README)
@@ -317,8 +354,9 @@ microservices. Full module-by-module design, database schema, and API
 structure live in `docs/architecture.md` once enough modules exist to make
 that worth writing — for now, each module's own doc
 ([`docs/authentication.md`](docs/authentication.md),
-[`docs/user-agent-management.md`](docs/user-agent-management.md)) covers
-its own design, and [`docs/api.md`](docs/api.md) is the running endpoint
+[`docs/user-agent-management.md`](docs/user-agent-management.md),
+[`docs/zone-management.md`](docs/zone-management.md)) covers its own
+design, and [`docs/api.md`](docs/api.md) is the running endpoint
 reference across all of them.
 
 Two source-document points worth recording now, since they affect the
@@ -358,3 +396,9 @@ Grows with each module.
 | Admin-only agent provisioning, transactional | `backend/internal/agents/repository.go` (`Create`) | `TestAgentCreation_TransactionalAtomicity`, `TestCreateAgent_RoleGating` | `docs/user-agent-management.md` |
 | Agent availability/location management + IDOR protection | `backend/internal/agents/handler.go` | `TestUpdate{Availability,Location}Handler_AnotherAgentForbidden` | `docs/user-agent-management.md` |
 | Frontend profile edit, admin agent management, agent operations | `frontend/src/pages/Account.tsx`, `pages/admin/AgentsPage.tsx`, `pages/agent/OperationsPage.tsx` | `Account.test.tsx`, `AgentsPage.test.tsx`, `OperationsPage.test.tsx` | `docs/user-agent-management.md` |
+| `zones`/`areas` tables: name UNIQUE/CHECK, area→zone FK, per-zone area UNIQUE | `backend/migrations/0003_create_zones_table.sql`, `0004_create_areas_table.sql` | `TestZonesTable_*`, `TestAreasTable_*` | `docs/zone-management.md` |
+| Admin-only zone/area CRUD, no cross-zone mass assignment | `backend/internal/zones/handler.go`, `routes.go` | `TestZoneEndpoints_RoleGating`, `TestAreaCreate_ZoneIDBodyTamperCannotOverridePath` | `docs/zone-management.md` |
+| Deterministic address→area→zone resolution, INTRA/INTER classification | `backend/internal/zones/resolution.go` (`ResolvePickupDrop`, `DetermineZoneRelationship`) | `resolution_test.go`, `TestResolution_IntraAndInterAgainstRealDatabase` | `docs/zone-management.md` |
+| Inactive-zone resolution explicitly rejected (not silently allowed) | `backend/internal/zones/resolution.go` (`ErrZoneInactive`) | `TestResolveArea_InactiveZoneIsRejected` | `docs/zone-management.md` |
+| `delivery_agents.current_zone_id` foreign key completed | `backend/migrations/0005_add_zone_fk_to_delivery_agents.sql` | `TestDeliveryAgentsCurrentZoneFK` | `docs/zone-management.md` |
+| Frontend admin zone/area management, loading/empty/error states | `frontend/src/pages/admin/ZonesPage.tsx` | `ZonesPage.test.tsx`, `services/zones.test.ts` | `docs/zone-management.md` |

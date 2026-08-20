@@ -22,6 +22,7 @@ import (
 	"lastmiletracker/internal/database"
 	"lastmiletracker/internal/server"
 	"lastmiletracker/internal/users"
+	"lastmiletracker/internal/zones"
 )
 
 const shutdownTimeout = 10 * time.Second
@@ -66,6 +67,7 @@ func main() {
 
 	usersRepo := users.NewPostgresRepository(pool)
 	agentsRepo := agents.NewPostgresRepository(pool)
+	zonesRepo := zones.NewPostgresRepository(pool)
 
 	if err := auth.SeedDemoUsers(ctx, usersRepo, logger); err != nil {
 		logger.Error("demo user seeding failed", "error", err)
@@ -85,6 +87,7 @@ func main() {
 	router := server.NewRouter(pool, logger,
 		auth.Mount(usersRepo, cfg.JWTSecret),
 		agents.Mount(agentsRepo, cfg.JWTSecret),
+		zones.Mount(zonesRepo, cfg.JWTSecret),
 	)
 	addr := net.JoinHostPort(cfg.ServerHost, cfg.ServerPort)
 	httpServer := &http.Server{
