@@ -1,0 +1,35 @@
+# --- Secrets ---
+.env
+*.env.local
+
+# --- Go ---
+/backend/bin/
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# --- Node / frontend ---
+node_modules/
+frontend/dist/
+dist/
+build/
+coverage/
+*.local
+
+# --- Docker ---
+# (bind-mounted volumes are named/managed by Compose, nothing to ignore here)
+
+# --- IDE / editor ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+
+# --- Logs / temp ---
+*.log
+tmp/

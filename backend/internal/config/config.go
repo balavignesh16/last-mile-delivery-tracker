@@ -1,0 +1,92 @@
+// Package config loads application configuration from environment variables.
+//
+// M01 scope only: server and database settings. Later modules (JWT secrets,
+// notification provider keys, etc.) extend Config when they land — this
+// package does not anticipate their fields ahead of time.
+package config
+
+import (
+	"fmt"
+	"net/url"
+	"os"
+	"strings"
+)
+
+// Config holds every setting M01's server and database foundation needs.
+type Config struct {
+	AppEnv     string
+	ServerHost string
+	ServerPort string
+	DB         DatabaseConfig
+}
+
+// DatabaseConfig holds PostgreSQL connection settings.
+type DatabaseConfig struct {
+	Host     string
+	Port     string
+	Name     string
+	User     string
+	Password string
+	SSLMode  string
+}
+
+// Load reads configuration from environment variables. It returns a
+// descriptive error naming every missing required variable rather than
+// failing on the first one, so a misconfigured environment can be fixed
+// in one pass.
+func Load() (*Config, error) {
+	cfg := &Config{
+		AppEnv:     getenvDefault("APP_ENV", "development"),
+		ServerHost: getenvDefault("SERVER_HOST", "0.0.0.0"),
+		ServerPort: getenvDefault("SERVER_PORT", "8080"),
+		DB: DatabaseConfig{
+			Host:     os.Getenv("DB_HOST"),
+			Port:     os.Getenv("DB_PORT"),
+			Name:     os.Getenv("DB_NAME"),
+			User:     os.Getenv("DB_USER"),
+			Password: os.Getenv("DB_PASSWORD"),
+			SSLMode:  getenvDefault("DB_SSLMODE", "disable"),
+		},
+	}
+
+	var missing []string
+	if cfg.DB.Host == "" {
+		missing = append(missing, "DB_HOST")
+	}
+	if cfg.DB.Port == "" {
+		missing = append(missing, "DB_PORT")
+	}
+	if cfg.DB.Name == "" {
+		missing = append(missing, "DB_NAME")
+	}
+	if cfg.DB.User == "" {
+		missing = append(missing, "DB_USER")
+	}
+	if cfg.DB.Password == "" {
+		missing = append(missing, "DB_PASSWORD")
+	}
+	if len(missing) > 0 {
+		return nil, fmt.Errorf("missing required environment variable(s): %s (see .env.example)", strings.Join(missing, ", "))
+	}
+
+	return cfg, nil
+}
+
+// DSN builds a PostgreSQL connection string from the database configuration.
+func (c *Config) DSN() string {
+	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s",
+		url.QueryEscape(c.DB.User),
+		url.QueryEscape(c.DB.Password),
+		c.DB.Host,
+		c.DB.Port,
+		c.DB.Name,
+		c.DB.SSLMode,
+	)
+}
+
+func getenvDefault(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
