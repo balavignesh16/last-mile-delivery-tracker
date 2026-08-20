@@ -1,8 +1,4 @@
 // Package config loads application configuration from environment variables.
-//
-// M01 scope only: server and database settings. Later modules (JWT secrets,
-// notification provider keys, etc.) extend Config when they land — this
-// package does not anticipate their fields ahead of time.
 package config
 
 import (
@@ -12,12 +8,13 @@ import (
 	"strings"
 )
 
-// Config holds every setting M01's server and database foundation needs.
+// Config holds every setting the backend needs, across all modules.
 type Config struct {
 	AppEnv     string
 	ServerHost string
 	ServerPort string
 	DB         DatabaseConfig
+	JWTSecret  string
 }
 
 // DatabaseConfig holds PostgreSQL connection settings.
@@ -47,6 +44,7 @@ func Load() (*Config, error) {
 			Password: os.Getenv("DB_PASSWORD"),
 			SSLMode:  getenvDefault("DB_SSLMODE", "disable"),
 		},
+		JWTSecret: os.Getenv("JWT_SECRET"),
 	}
 
 	var missing []string
@@ -64,6 +62,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.DB.Password == "" {
 		missing = append(missing, "DB_PASSWORD")
+	}
+	if cfg.JWTSecret == "" {
+		missing = append(missing, "JWT_SECRET")
 	}
 	if len(missing) > 0 {
 		return nil, fmt.Errorf("missing required environment variable(s): %s (see .env.example)", strings.Join(missing, ", "))

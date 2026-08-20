@@ -11,7 +11,7 @@ func TestLoad_MissingRequiredVars(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an error when required DB_* variables are missing, got nil")
 	}
-	for _, want := range []string{"DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD"} {
+	for _, want := range []string{"DB_HOST", "DB_PORT", "DB_NAME", "DB_USER", "DB_PASSWORD", "JWT_SECRET"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("expected error to mention %s, got: %v", want, err)
 		}
@@ -24,6 +24,7 @@ func TestLoad_AllRequiredVarsSet(t *testing.T) {
 	t.Setenv("DB_NAME", "lastmile")
 	t.Setenv("DB_USER", "lastmile")
 	t.Setenv("DB_PASSWORD", "secret")
+	t.Setenv("JWT_SECRET", "test-secret")
 
 	cfg, err := Load()
 	if err != nil {
@@ -31,6 +32,9 @@ func TestLoad_AllRequiredVarsSet(t *testing.T) {
 	}
 	if cfg.DB.Host != "localhost" || cfg.DB.Port != "5432" {
 		t.Errorf("unexpected DB config: %+v", cfg.DB)
+	}
+	if cfg.JWTSecret != "test-secret" {
+		t.Errorf("JWTSecret = %q, want test-secret", cfg.JWTSecret)
 	}
 }
 
@@ -40,6 +44,7 @@ func TestLoad_Defaults(t *testing.T) {
 	t.Setenv("DB_NAME", "lastmile")
 	t.Setenv("DB_USER", "lastmile")
 	t.Setenv("DB_PASSWORD", "secret")
+	t.Setenv("JWT_SECRET", "test-secret")
 
 	cfg, err := Load()
 	if err != nil {

@@ -21,7 +21,7 @@ func TestRouter_UnknownRouteReturnsJSON404(t *testing.T) {
 		t.Errorf("Content-Type = %q, want application/json", ct)
 	}
 
-	var body errorResponse
+	var body ErrorResponse
 	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
 		t.Fatalf("expected a JSON error body, got decode error: %v", err)
 	}

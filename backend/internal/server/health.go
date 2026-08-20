@@ -31,6 +31,6 @@ func healthHandler(pinger HealthPinger) http.HandlerFunc {
 			statusCode = http.StatusServiceUnavailable
 		}
 
-		writeJSON(w, statusCode, resp)
+		WriteJSON(w, statusCode, resp)
 	}
 }

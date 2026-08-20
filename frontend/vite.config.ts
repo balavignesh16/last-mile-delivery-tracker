@@ -6,18 +6,20 @@ import { defineConfig } from 'vitest/config'
 export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
-    // Dev-time proxy so the frontend can call same-origin /api/* paths
-    // instead of needing CORS configuration on the backend. Strips the
-    // /api prefix before forwarding to the Go server.
+    // Dev-time proxy so the frontend can call same-origin paths instead of
+    // needing CORS configuration on the backend. No rewrite: the backend's
+    // real routes are already at /api/v1/* (per the frozen API design) and
+    // /health, so the proxy forwards both prefixes byte-for-byte.
     proxy: {
-      '/api': {
-        target: 'http://localhost:8080',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, ''),
-      },
+      '/api': { target: 'http://localhost:8080', changeOrigin: true },
+      '/health': { target: 'http://localhost:8080', changeOrigin: true },
     },
   },
   test: {
-    environment: 'node',
+    // jsdom (not 'node') because M02 introduces real component/context
+    // state (AuthContext, ProtectedRoute) worth rendering and asserting
+    // on, not just pure-function tests.
+    environment: 'jsdom',
+    setupFiles: ['./src/test/setup.ts'],
   },
 })

@@ -1,7 +1,9 @@
-// Command server is the M01 entry point: it loads configuration, connects
-// to PostgreSQL, and serves the foundation HTTP API (currently just
-// GET /health) with graceful shutdown. Business routes are mounted by
-// later modules inside internal/server — this file does not grow with them.
+// Command server is the composition root: it loads configuration, connects
+// to PostgreSQL, applies migrations, seeds demo accounts, and serves the
+// HTTP API with graceful shutdown. This file is where each module's
+// routes get mounted onto the shared router — internal/server itself
+// never imports a business package, so this is the one place that wires
+// them together.
 package main
 
 import (
@@ -14,9 +16,11 @@ import (
 	"syscall"
 	"time"
 
+	"lastmiletracker/internal/auth"
 	"lastmiletracker/internal/config"
 	"lastmiletracker/internal/database"
 	"lastmiletracker/internal/server"
+	"lastmiletracker/internal/users"
 )
 
 const shutdownTimeout = 10 * time.Second
@@ -53,7 +57,20 @@ func main() {
 	defer pool.Close()
 	logger.Info("database connection established")
 
-	router := server.NewRouter(pool, logger)
+	if err := database.Migrate(ctx, pool); err != nil {
+		logger.Error("database migration failed", "error", err)
+		os.Exit(1)
+	}
+	logger.Info("database migrations applied")
+
+	usersRepo := users.NewPostgresRepository(pool)
+
+	if err := auth.SeedDemoUsers(ctx, usersRepo, logger); err != nil {
+		logger.Error("demo user seeding failed", "error", err)
+		os.Exit(1)
+	}
+
+	router := server.NewRouter(pool, logger, auth.Mount(usersRepo, cfg.JWTSecret))
 	addr := net.JoinHostPort(cfg.ServerHost, cfg.ServerPort)
 	httpServer := &http.Server{
 		Addr:              addr,
