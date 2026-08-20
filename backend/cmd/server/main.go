@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"lastmiletracker/internal/agents"
 	"lastmiletracker/internal/auth"
 	"lastmiletracker/internal/config"
 	"lastmiletracker/internal/database"
@@ -64,13 +65,27 @@ func main() {
 	logger.Info("database migrations applied")
 
 	usersRepo := users.NewPostgresRepository(pool)
+	agentsRepo := agents.NewPostgresRepository(pool)
 
 	if err := auth.SeedDemoUsers(ctx, usersRepo, logger); err != nil {
 		logger.Error("demo user seeding failed", "error", err)
 		os.Exit(1)
 	}
 
-	router := server.NewRouter(pool, logger, auth.Mount(usersRepo, cfg.JWTSecret))
+	demoAgentUser, err := usersRepo.FindByEmail(ctx, auth.SeedAgentEmail)
+	if err != nil {
+		logger.Error("could not find seeded demo agent user", "error", err)
+		os.Exit(1)
+	}
+	if err := agentsRepo.EnsureDemoAgentRecord(ctx, demoAgentUser.ID, logger); err != nil {
+		logger.Error("demo agent record seeding failed", "error", err)
+		os.Exit(1)
+	}
+
+	router := server.NewRouter(pool, logger,
+		auth.Mount(usersRepo, cfg.JWTSecret),
+		agents.Mount(agentsRepo, cfg.JWTSecret),
+	)
 	addr := net.JoinHostPort(cfg.ServerHost, cfg.ServerPort)
 	httpServer := &http.Server{
 		Addr:              addr,

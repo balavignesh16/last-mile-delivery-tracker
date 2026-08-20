@@ -24,3 +24,8 @@ export interface LoginInput {
   email: string
   password: string
 }
+
+export interface ProfileUpdateInput {
+  full_name: string
+  phone?: string
+}

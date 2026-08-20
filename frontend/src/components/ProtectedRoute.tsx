@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { Navigate } from 'react-router-dom'
 import { useAuth } from '../hooks/useAuth'
+import type { Role } from '../types/auth'
 
 // Frontend route protection is a UX convenience, not a security boundary
 // — the backend's RequireAuth/RequireRole middleware is authoritative.
@@ -9,8 +10,12 @@ import { useAuth } from '../hooks/useAuth'
 // makes still gets rejected by the backend if the token is missing,
 // expired, or the wrong role. This component only decides what to show,
 // never what to allow.
-export function ProtectedRoute({ children }: { children: ReactNode }) {
-  const { status } = useAuth()
+//
+// `roles`, when given, additionally hides the route from an authenticated
+// user whose role isn't in the list (redirecting to /app rather than
+// /login, since they are authenticated — just not permitted here).
+export function ProtectedRoute({ children, roles }: { children: ReactNode; roles?: Role[] }) {
+  const { status, user } = useAuth()
 
   if (status === 'loading') {
     return (
@@ -22,6 +27,10 @@ export function ProtectedRoute({ children }: { children: ReactNode }) {
 
   if (status === 'unauthenticated') {
     return <Navigate to="/login" replace />
+  }
+
+  if (roles && user && !roles.includes(user.role)) {
+    return <Navigate to="/app" replace />
   }
 
   return <>{children}</>

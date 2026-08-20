@@ -63,6 +63,14 @@ export function apiPost<T>(path: string, body: unknown, token?: string): Promise
   })
 }
 
+export function apiPut<T>(path: string, body: unknown, token?: string): Promise<T> {
+  return apiRequest<T>(path, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(token) },
+    body: JSON.stringify(body),
+  })
+}
+
 function authHeaders(token?: string): HeadersInit {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }

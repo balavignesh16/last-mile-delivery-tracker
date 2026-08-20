@@ -15,9 +15,13 @@ import (
 // POST /agents. These are documented in the README as demo-only; never
 // reuse this pattern for real production credentials.
 const (
-	seedAdminEmail       = "admin@lastmile.test"
-	seedAdminPassword    = "Admin123!"
-	seedAgentEmail       = "agent@lastmile.test"
+	seedAdminEmail    = "admin@lastmile.test"
+	seedAdminPassword = "Admin123!"
+	// SeedAgentEmail is exported so internal/agents' own seed step (which
+	// creates the delivery_agents row this package's users row alone
+	// isn't enough for — see agents.EnsureDemoAgentRecord) can find the
+	// same account without duplicating the literal.
+	SeedAgentEmail       = "agent@lastmile.test"
 	seedAgentPassword    = "Agent123!"
 	seedCustomerEmail    = "customer@lastmile.test"
 	seedCustomerPassword = "Customer123!"
@@ -32,7 +36,7 @@ type seedUser struct {
 
 var demoUsers = []seedUser{
 	{seedAdminEmail, seedAdminPassword, "Demo Admin", users.RoleAdmin},
-	{seedAgentEmail, seedAgentPassword, "Demo Agent", users.RoleDeliveryAgent},
+	{SeedAgentEmail, seedAgentPassword, "Demo Agent", users.RoleDeliveryAgent},
 	{seedCustomerEmail, seedCustomerPassword, "Demo Customer", users.RoleCustomer},
 }
 

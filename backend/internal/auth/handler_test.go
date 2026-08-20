@@ -62,7 +62,19 @@ func (f *fakeRepo) FindByID(_ context.Context, id string) (users.User, error) {
 	return u, nil
 }
 
-func doRequest(t *testing.T, handler http.HandlerFunc, method, path, body string) *httptest.ResponseRecorder {
+func (f *fakeRepo) Update(_ context.Context, id string, update users.ProfileUpdate) (users.User, error) {
+	u, ok := f.byID[id]
+	if !ok {
+		return users.User{}, users.ErrNotFound
+	}
+	u.FullName = update.FullName
+	u.Phone = update.Phone
+	f.byID[id] = u
+	f.byEmail[u.Email] = u
+	return u, nil
+}
+
+func doRequest(t *testing.T, handler http.Handler, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -320,6 +332,113 @@ func TestGetMeHandler_UserNoLongerExistsReturns401(t *testing.T) {
 	}
 }
 
+// --- UpdateMe ---
+
+func TestUpdateMeHandler_UpdatesPermittedFields(t *testing.T) {
+	repo := newFakeRepo()
+	created, err := repo.Create(context.Background(), users.NewUser{
+		Email: "update@example.com", PasswordHash: mustHashForTest(t, "password123"),
+		FullName: "Old Name", Role: users.RoleCustomer,
+	})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+
+	handler := withIdentity(Identity{UserID: created.ID, Role: created.Role})(UpdateMeHandler(repo))
+	rec := doRequest(t, handler, http.MethodPut, "/api/v1/users/me",
+		`{"full_name":"New Name","phone":"555-0100"}`)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	body := decodeJSON[map[string]any](t, rec)
+	if body["full_name"] != "New Name" {
+		t.Errorf("full_name = %v, want New Name", body["full_name"])
+	}
+	if body["phone"] != "555-0100" {
+		t.Errorf("phone = %v, want 555-0100", body["phone"])
+	}
+	if _, present := body["password_hash"]; present {
+		t.Error("response contains password_hash — must never be returned")
+	}
+}
+
+func TestUpdateMeHandler_UnauthenticatedReturns401(t *testing.T) {
+	repo := newFakeRepo()
+	rec := doRequest(t, UpdateMeHandler(repo), http.MethodPut, "/api/v1/users/me", `{"full_name":"New Name"}`)
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestUpdateMeHandler_EmptyFullNameReturns422(t *testing.T) {
+	repo := newFakeRepo()
+	created, err := repo.Create(context.Background(), users.NewUser{
+		Email: "empty@example.com", PasswordHash: mustHashForTest(t, "password123"),
+		FullName: "Someone", Role: users.RoleCustomer,
+	})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+
+	handler := withIdentity(Identity{UserID: created.ID, Role: created.Role})(UpdateMeHandler(repo))
+	rec := doRequest(t, handler, http.MethodPut, "/api/v1/users/me", `{"full_name":"   ","phone":""}`)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+}
+
+// TestUpdateMeHandler_CannotMassAssignProtectedFields is the direct test
+// for STEP 28's mass-assignment concern: id, email, role, password_hash,
+// and created_at are all absent from updateMeRequest's JSON tags, and
+// DisallowUnknownFields means sending any of them fails the whole request
+// closed rather than silently dropping the field.
+func TestUpdateMeHandler_CannotMassAssignProtectedFields(t *testing.T) {
+	repo := newFakeRepo()
+	created, err := repo.Create(context.Background(), users.NewUser{
+		Email: "protected@example.com", PasswordHash: mustHashForTest(t, "password123"),
+		FullName: "Original Name", Role: users.RoleCustomer,
+	})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+
+	cases := []string{
+		`{"full_name":"New Name","role":"ADMIN"}`,
+		`{"full_name":"New Name","id":"attacker-supplied-id"}`,
+		`{"full_name":"New Name","email":"new-email@example.com"}`,
+		`{"full_name":"New Name","password_hash":"not-a-real-hash"}`,
+		`{"full_name":"New Name","created_at":"2000-01-01T00:00:00Z"}`,
+	}
+
+	handler := withIdentity(Identity{UserID: created.ID, Role: created.Role})(UpdateMeHandler(repo))
+	for _, body := range cases {
+		t.Run(body, func(t *testing.T) {
+			rec := doRequest(t, handler, http.MethodPut, "/api/v1/users/me", body)
+			if rec.Code != http.StatusUnprocessableEntity {
+				t.Errorf("status = %d, want %d (unknown field must be rejected)", rec.Code, http.StatusUnprocessableEntity)
+			}
+		})
+	}
+
+	// The user's actual stored record must be completely unchanged —
+	// role especially.
+	unchanged, err := repo.FindByID(context.Background(), created.ID)
+	if err != nil {
+		t.Fatalf("FindByID() error: %v", err)
+	}
+	if unchanged.Role != users.RoleCustomer {
+		t.Errorf("role = %v, want unchanged CUSTOMER", unchanged.Role)
+	}
+	if unchanged.FullName != "Original Name" {
+		t.Errorf("full_name = %v, want unchanged Original Name", unchanged.FullName)
+	}
+	if unchanged.PasswordHash != created.PasswordHash {
+		t.Error("password_hash changed despite being absent from the DTO")
+	}
+}
+
 // --- Pure validation helpers ---
 
 func TestValidateRegistration(t *testing.T) {
@@ -336,7 +455,7 @@ func TestValidateRegistration(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			problems := validateRegistration(tc.email, tc.pw, tc.fname)
+			problems := ValidateRegistration(tc.email, tc.pw, tc.fname)
 			if tc.wantProblems && len(problems) == 0 {
 				t.Error("expected validation problems, got none")
 			}
@@ -348,7 +467,7 @@ func TestValidateRegistration(t *testing.T) {
 }
 
 func TestNormalizeEmail(t *testing.T) {
-	if got := normalizeEmail("  Test@Example.COM  "); got != "test@example.com" {
-		t.Errorf("normalizeEmail() = %q, want test@example.com", got)
+	if got := NormalizeEmail("  Test@Example.COM  "); got != "test@example.com" {
+		t.Errorf("NormalizeEmail() = %q, want test@example.com", got)
 	}
 }

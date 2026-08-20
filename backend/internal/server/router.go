@@ -23,9 +23,16 @@ type HealthPinger interface {
 
 // NewRouter builds the application's HTTP handler: middleware chain,
 // foundation routes, consistent JSON responses for unmatched routes, and
-// whatever business routes the caller mounts. Each mount function receives
-// the router after foundation setup, so callers can add whatever routes
-// their module owns — e.g. auth.Mount(usersRepo, jwtSecret).
+// whatever business routes the caller mounts.
+//
+// Each mount function receives one shared "/api/v1" sub-router, not the
+// top-level router — every business module registers its own paths onto
+// that same sub-router, and it is mounted onto the top-level router
+// exactly once, here. This matters: chi panics ("attempting to Mount() a
+// handler on an existing path") if two different modules each try to
+// independently wrap their own routes in r.Route("/api/v1", ...) on the
+// same parent router. Verified empirically before relying on it — see the
+// M03 report.
 //
 // The return type is chi.Router (not http.Handler) specifically so callers
 // can keep mounting routes after construction if needed; every existing
@@ -42,9 +49,11 @@ func NewRouter(pinger HealthPinger, logger *slog.Logger, mount ...func(chi.Route
 
 	r.Get("/health", healthHandler(pinger))
 
+	v1 := chi.NewRouter()
 	for _, m := range mount {
-		m(r)
+		m(v1)
 	}
+	r.Mount("/api/v1", v1)
 
 	r.NotFound(notFoundHandler)
 	r.MethodNotAllowed(methodNotAllowedHandler)

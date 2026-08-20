@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { fetchCurrentUser, loginUser, registerUser } from '../services/auth'
-import type { RegisterInput, UserProfile } from '../types/auth'
+import { fetchCurrentUser, loginUser, registerUser, updateProfile as updateProfileRequest } from '../services/auth'
+import type { ProfileUpdateInput, RegisterInput, UserProfile } from '../types/auth'
 import { AuthContext, type AuthStatus } from './auth-context'
 
 // Token storage tradeoff, documented plainly rather than overstated:
@@ -61,6 +61,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await login(input.email, input.password)
   }
 
+  async function updateProfile(input: ProfileUpdateInput) {
+    if (!token) {
+      throw new Error('updateProfile called while unauthenticated')
+    }
+    const updated = await updateProfileRequest(token, input)
+    setUser(updated)
+  }
+
   function logout() {
     sessionStorage.removeItem(TOKEN_STORAGE_KEY)
     setToken(null)
@@ -69,7 +77,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ token, user, status, login, register, logout }}>
+    <AuthContext.Provider value={{ token, user, status, login, register, updateProfile, logout }}>
       {children}
     </AuthContext.Provider>
   )

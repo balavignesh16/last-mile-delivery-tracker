@@ -10,18 +10,20 @@ with a React + TypeScript frontend, structured as a modular monolith.
 
 ## Current Status
 
-**M02 — Authentication & RBAC.** The backend now has a real database table
-(`users`), role-based authentication (JWT + bcrypt), and role-based
-authorization middleware. The frontend has real login/registration screens
-and a protected route. **No other business functionality exists yet** — no
-orders, no zones, no rates, no assignment, no tracking. Those arrive in M03
-through M12, in order, each expanding this README and `docs/` as they land.
+**M03 — User & Agent Management.** The backend now also has a
+`delivery_agents` table, admin-only agent provisioning, agent
+availability/location management, and profile editing (`PUT
+/users/me`). The frontend has a real profile-edit form, an admin agent
+management screen, and an agent operational screen. **No other business
+functionality exists yet** — no zones, no rates, no orders, no assignment
+algorithm, no tracking. Those arrive in M04 through M12, in order, each
+expanding this README and `docs/` as they land.
 
 | Module | Status |
 |---|---|
 | M01 — Foundation & Infrastructure | ✅ Done |
 | M02 — Authentication & RBAC | ✅ Done |
-| M03 — User & Agent Management | Not started |
+| M03 — User & Agent Management | ✅ Done |
 | M04 — Zone Management | Not started |
 | M05 — Rate Configuration | Not started |
 | M06 — Rate Calculation Engine | Not started |
@@ -199,6 +201,10 @@ version.
   `user.Role` themselves.
 - **`GET /api/v1/users/me`** (not `/auth/me`) returns the authenticated
   caller's own profile. Requires a valid bearer token.
+- **`PUT /api/v1/users/me`** (M03) updates `full_name`/`phone` only — the
+  request has no `id`/`email`/`role`/`password_hash` field at all, so
+  role-tampering through this endpoint is structurally impossible, not
+  just filtered out.
 
 **Demo accounts** (seeded automatically on backend startup — see
 [Local Setup](#local-setup)):
@@ -214,6 +220,38 @@ secrets — the point is that an evaluator can log in as any role without a
 real account-provisioning flow existing yet (that's M03's `POST /agents`
 for agents; admin accounts are never created through any HTTP endpoint at
 all).
+
+## Delivery Agents
+
+Full design detail (schema, the `active`/`availability` distinction,
+transactional provisioning, IDOR protection, M09 forward-compatibility) is
+in [`docs/user-agent-management.md`](docs/user-agent-management.md);
+endpoint examples are in [`docs/api.md`](docs/api.md). Short version:
+
+- **`POST /api/v1/agents`** (ADMIN only) provisions a `DELIVERY_AGENT` —
+  creates the linked `users` row and `delivery_agents` row in one
+  transaction. No `role` field on the request, same server-controlled
+  pattern as registration.
+- **`GET /api/v1/agents`** (ADMIN only) lists every agent with their
+  operational state. No filters — not an oversight, out of M03's scope.
+- **`GET /api/v1/agents/me`** (DELIVERY_AGENT only) is an agent's
+  self-lookup, the same role `GET /users/me` plays for identity.
+- **`PUT /api/v1/agents/{id}/availability`** (ADMIN or the agent
+  themselves) sets `AVAILABLE`/`BUSY`/`OFFLINE`.
+- **`PUT /api/v1/agents/{id}/location`** (the agent themselves only, not
+  even ADMIN) sets current latitude/longitude — validated (±90/±180,
+  finite), with `location_updated_at` always set from the database's own
+  clock, never a client-supplied timestamp.
+
+Every agent-management write is protected twice: a route-level role gate,
+then a handler-level ownership check comparing the caller's own user ID
+against the target agent's — the second layer exists because two agents
+share the identical `DELIVERY_AGENT` role, so a role check alone cannot
+stop Agent A from editing Agent B's data. See
+`docs/user-agent-management.md` for the full reasoning and the tests that
+verify it (`TestUpdateAvailabilityHandler_AnotherAgentForbidden`,
+`TestUpdateLocationHandler_AnotherAgentForbidden`, and the integration-level
+`TestCreateAgent_DeliveryAgentCannotCreateAnotherAgent`).
 
 ## Repository Structure
 
@@ -233,9 +271,9 @@ last-mile-delivery-tracker/
 │   │   ├── config/               # environment-based configuration (M01, M02: +JWT_SECRET)
 │   │   ├── database/             # pgx connection pool + migration runner (M01, M02)
 │   │   ├── server/               # router, middleware, /health (M01)
-│   │   ├── auth/                 # password hashing, JWT, RBAC middleware, register/login/me handlers, demo seed (M02)
-│   │   ├── users/                # User domain model + Postgres repository (M02); agent fields land in M03
-│   │   ├── agents/               # M03 — reserved, empty
+│   │   ├── auth/                 # password hashing, JWT, RBAC middleware, register/login/GET+PUT me handlers, demo seed (M02, M03)
+│   │   ├── users/                # User domain model + Postgres repository, incl. Update (M02, M03)
+│   │   ├── agents/               # delivery_agents domain, repository (transactional creation), handlers, routes (M03)
 │   │   ├── zones/                # M04 — reserved, empty
 │   │   ├── rates/                # M05/M06 — reserved, empty
 │   │   ├── orders/                # M07 — reserved, empty
@@ -243,7 +281,7 @@ last-mile-delivery-tracker/
 │   │   ├── assignment/            # M09 — reserved, empty
 │   │   ├── rescheduling/          # M10 — reserved, empty
 │   │   └── notifications/         # M11 — reserved, empty
-│   ├── migrations/                # embedded SQL migrations (go:embed) + 0001_create_users_table.sql (M02)
+│   ├── migrations/                # embedded SQL migrations (go:embed): 0001 users (M02), 0002 delivery_agents (M03)
 │   └── tests/
 │       ├── unit/                  # convention note — unit tests are co-located with source
 │       ├── integration/           # DB-backed integration tests (build tag: integration)
@@ -253,17 +291,20 @@ last-mile-delivery-tracker/
 │   ├── package.json
 │   ├── vite.config.ts
 │   └── src/
-│       ├── components/            # Layout (auth-aware nav), StatusBadge, ErrorBanner, ProtectedRoute
-│       ├── pages/                 # Home, LoginPage, RegisterPage, Account
-│       ├── services/              # api.ts, health.ts, auth.ts
+│       ├── components/            # Layout (role-aware nav), StatusBadge, ErrorBanner, ProtectedRoute (+roles)
+│       ├── pages/                 # Home, LoginPage, RegisterPage, Account (profile edit);
+│       │                          #   admin/AgentsPage, agent/OperationsPage (M03)
+│       ├── services/              # api.ts (+apiPut), health.ts, auth.ts (+updateProfile), agents.ts (M03)
 │       ├── hooks/                 # useHealthCheck, useAuth
 │       ├── contexts/              # AuthContext.tsx (provider) + auth-context.ts (context object)
-│       ├── types/                 # HealthResponse, auth.ts
+│       ├── types/                 # HealthResponse, auth.ts (+ProfileUpdateInput), agent.ts (M03)
 │       ├── test/                  # setup.ts — React Testing Library cleanup
 │       └── utils/                 # reserved — no shared utility yet
 │
 ├── docs/                          # detailed per-module docs, written as each module lands
-│   └── authentication.md          # roles, schema, JWT, RBAC, token-storage tradeoff (M02)
+│   ├── api.md                     # full endpoint reference, every route so far
+│   ├── authentication.md          # roles, schema, JWT, RBAC, token-storage tradeoff (M02)
+│   └── user-agent-management.md   # delivery_agents schema, IDOR protection, M09 notes (M03)
 │
 └── scripts/
     └── seed/                      # reserved for later modules' larger seed data (M02's demo users seed from main.go instead — see its README)
@@ -274,8 +315,11 @@ last-mile-delivery-tracker/
 Modular monolith: twelve modules, one deployable Go backend, no
 microservices. Full module-by-module design, database schema, and API
 structure live in `docs/architecture.md` once enough modules exist to make
-that worth writing — for now, each module's own doc (starting with
-[`docs/authentication.md`](docs/authentication.md)) covers its own design.
+that worth writing — for now, each module's own doc
+([`docs/authentication.md`](docs/authentication.md),
+[`docs/user-agent-management.md`](docs/user-agent-management.md)) covers
+its own design, and [`docs/api.md`](docs/api.md) is the running endpoint
+reference across all of them.
 
 Two source-document points worth recording now, since they affect the
 whole project's submission, not just one module:
@@ -309,3 +353,8 @@ Grows with each module.
 | `GET /users/me` (not `/auth/me`) | `backend/internal/auth/handler.go` (`GetMeHandler`) | `handler_test.go`, integration flow test | `docs/authentication.md` |
 | `users` table: unique email, role CHECK constraint | `backend/migrations/0001_create_users_table.sql` | `TestUsersTable_EmailUniqueConstraint`, `TestUsersTable_RoleCheckConstraint` | `docs/authentication.md` |
 | Frontend login/register/logout, protected route | `frontend/src/pages/`, `contexts/AuthContext.tsx`, `components/ProtectedRoute.tsx` | `AuthContext.test.tsx`, `ProtectedRoute.test.tsx`, `auth.test.ts` | `docs/authentication.md` |
+| `PUT /users/me` profile editing, mass-assignment safe | `backend/internal/auth/handler.go` (`UpdateMeHandler`) | `TestUpdateMeHandler_CannotMassAssignProtectedFields` | `docs/api.md` |
+| `delivery_agents` table: unique user_id, FK, availability/coordinate CHECKs | `backend/migrations/0002_create_delivery_agents_table.sql` | `TestDeliveryAgentsTable_*` (4 tests) | `docs/user-agent-management.md` |
+| Admin-only agent provisioning, transactional | `backend/internal/agents/repository.go` (`Create`) | `TestAgentCreation_TransactionalAtomicity`, `TestCreateAgent_RoleGating` | `docs/user-agent-management.md` |
+| Agent availability/location management + IDOR protection | `backend/internal/agents/handler.go` | `TestUpdate{Availability,Location}Handler_AnotherAgentForbidden` | `docs/user-agent-management.md` |
+| Frontend profile edit, admin agent management, agent operations | `frontend/src/pages/Account.tsx`, `pages/admin/AgentsPage.tsx`, `pages/agent/OperationsPage.tsx` | `Account.test.tsx`, `AgentsPage.test.tsx`, `OperationsPage.test.tsx` | `docs/user-agent-management.md` |

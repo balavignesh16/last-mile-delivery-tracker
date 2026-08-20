@@ -1,5 +1,5 @@
 import { createContext } from 'react'
-import type { RegisterInput, UserProfile } from '../types/auth'
+import type { ProfileUpdateInput, RegisterInput, UserProfile } from '../types/auth'
 
 export type AuthStatus = 'loading' | 'authenticated' | 'unauthenticated'
 
@@ -9,6 +9,7 @@ export interface AuthContextValue {
   status: AuthStatus
   login: (email: string, password: string) => Promise<void>
   register: (input: RegisterInput) => Promise<void>
+  updateProfile: (input: ProfileUpdateInput) => Promise<void>
   logout: () => void
 }
 

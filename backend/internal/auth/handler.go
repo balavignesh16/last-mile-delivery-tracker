@@ -77,8 +77,8 @@ func RegisterHandler(repo users.Repository) http.HandlerFunc {
 			return
 		}
 
-		email := normalizeEmail(req.Email)
-		if problems := validateRegistration(email, req.Password, req.FullName); len(problems) > 0 {
+		email := NormalizeEmail(req.Email)
+		if problems := ValidateRegistration(email, req.Password, req.FullName); len(problems) > 0 {
 			server.WriteError(w, http.StatusUnprocessableEntity, strings.Join(problems, "; "))
 			return
 		}
@@ -134,7 +134,7 @@ func LoginHandler(repo users.Repository, jwtSecret string) http.HandlerFunc {
 			return
 		}
 
-		email := normalizeEmail(req.Email)
+		email := NormalizeEmail(req.Email)
 
 		user, err := repo.FindByEmail(r.Context(), email)
 		if err != nil {
@@ -167,15 +167,17 @@ func unauthorizedInvalidCredentials(w http.ResponseWriter) {
 	server.WriteError(w, http.StatusUnauthorized, "invalid email or password")
 }
 
-// GetMeHandler handles GET /api/v1/users/me. It lives here rather than in
-// internal/users specifically to avoid a real import cycle: internal/auth
-// already depends on internal/users for the Repository, and users/me's
-// only job is "look up the identity RequireAuth already put in context" —
-// which needs auth's Identity type. Putting the handler in internal/users
-// would require users to import auth right back. M03 can relocate this
-// (and add PUT /users/me, agent-specific fields, etc.) when it extends the
-// user-management surface; today it is a two-line lookup that belongs
-// next to the rest of the auth flow.
+// GetMeHandler and UpdateMeHandler handle GET/PUT /api/v1/users/me. They
+// stay here rather than moving to internal/users — considered in M03 and
+// decided against — specifically to avoid a real import cycle:
+// internal/auth already depends on internal/users for the Repository, and
+// these handlers' only job is "look up the identity RequireAuth already
+// put in context" — which needs auth's Identity type. Putting them in
+// internal/users would require users to import auth right back.
+// internal/agents (M03's new package) instead depends on both auth and
+// users with no cycle, since nothing imports agents — that is the
+// pattern this project uses to add identity-aware handlers without
+// relocating existing ones.
 func GetMeHandler(repo users.Repository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		identity, ok := IdentityFromContext(r.Context())
@@ -199,11 +201,72 @@ func GetMeHandler(repo users.Repository) http.HandlerFunc {
 	}
 }
 
-func normalizeEmail(raw string) string {
+// updateMeRequest deliberately has only the two fields the frozen
+// architecture permits a user to edit. There is no id/email/role/
+// password_hash field here at all — not "ignored", never decoded — which
+// is what makes mass-assignment onto those protected fields structurally
+// impossible rather than merely filtered out. Combined with
+// DisallowUnknownFields, a client that tries to sneak in
+// {"role":"ADMIN"} gets the whole request rejected (422), the same
+// fail-closed behavior as RegisterHandler.
+type updateMeRequest struct {
+	FullName string `json:"full_name"`
+	Phone    string `json:"phone"`
+}
+
+// UpdateMeHandler handles PUT /api/v1/users/me. A user can only ever
+// update their own profile — identity.UserID (from the verified JWT, not
+// any client input) is the only source of which row gets written.
+func UpdateMeHandler(repo users.Repository) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		identity, ok := IdentityFromContext(r.Context())
+		if !ok {
+			server.WriteError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+
+		var req updateMeRequest
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			server.WriteError(w, http.StatusUnprocessableEntity, "invalid request body: "+err.Error())
+			return
+		}
+
+		fullName := strings.TrimSpace(req.FullName)
+		if fullName == "" {
+			server.WriteError(w, http.StatusUnprocessableEntity, "full name is required")
+			return
+		}
+
+		var phone *string
+		if trimmed := strings.TrimSpace(req.Phone); trimmed != "" {
+			phone = &trimmed
+		}
+
+		updated, err := repo.Update(r.Context(), identity.UserID, users.ProfileUpdate{
+			FullName: fullName,
+			Phone:    phone,
+		})
+		if err != nil {
+			if errors.Is(err, users.ErrNotFound) {
+				server.WriteError(w, http.StatusUnauthorized, "user no longer exists")
+				return
+			}
+			slog.Error("profile update failed", "error", err)
+			server.WriteError(w, http.StatusInternalServerError, "could not update profile")
+			return
+		}
+
+		server.WriteJSON(w, http.StatusOK, toUserResponse(updated))
+	}
+}
+
+func NormalizeEmail(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
 }
 
-func validateRegistration(email, password, fullName string) []string {
+func ValidateRegistration(email, password, fullName string) []string {
 	var problems []string
 	if email == "" {
 		problems = append(problems, "email is required")

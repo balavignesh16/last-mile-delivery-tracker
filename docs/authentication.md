@@ -112,30 +112,39 @@ identity to be forbidden), not 403 — a defensive fallback, not the normal
 path. This is the one centralized place role checks live; handlers never
 contain `if user.Role == "ADMIN"` logic themselves.
 
-M02 has no real role-gated production endpoint yet (M03+ adds those), so
-`RequireRole`'s behavior is proven with a minimal test-only router in
-`internal/auth/middleware_test.go` rather than by inventing a fake business
-endpoint.
+M02 had no real role-gated production endpoint to prove `RequireRole`
+against, so it was verified with a minimal test-only router in
+`internal/auth/middleware_test.go`. M03's agent endpoints (see
+`docs/api.md`) are real, role-gated production endpoints using the exact
+same `RequireAuth`/`RequireRole` middleware — `internal/agents` imports
+both `internal/auth` (for RBAC and password hashing) and `internal/users`
+(for the repository), which is safe precisely because nothing imports
+`agents` back.
 
 ## Endpoints
+
+Full request/response examples, including M03's, live in
+[`docs/api.md`](./api.md). Summary:
 
 | Method | Path | Auth | Notes |
 |---|---|---|---|
 | `POST` | `/api/v1/auth/register` | none | Always creates a `CUSTOMER`. 201 / 409 (duplicate email) / 422 (validation). |
 | `POST` | `/api/v1/auth/login` | none | 200 with `{"token": "..."}` / 401 (generic "invalid email or password" for both wrong password and unknown email) / 422 (missing fields). |
 | `GET` | `/api/v1/users/me` | Bearer token | Returns the caller's own profile. 401 if missing/invalid/expired token. |
+| `PUT` | `/api/v1/users/me` (M03) | Bearer token | Updates `full_name`/`phone` only — no `role`, `email`, `id`, or `password_hash` field exists on the request at all. |
 
-`GET /users/me` (not `GET /auth/me`) is the canonical current-user endpoint
-per the frozen architecture — `/auth/*` is reserved for credential
-lifecycle actions (register, login), not resource retrieval.
+`GET`/`PUT /users/me` (not `/auth/me`) are the canonical current-user
+endpoints per the frozen architecture — `/auth/*` is reserved for
+credential lifecycle actions (register, login), not resource retrieval.
 
-Its handler lives in `internal/auth`, not `internal/users`, despite the URL.
-`internal/auth` already depends on `internal/users` for the repository;
-putting the handler in `internal/users` would require `users` to import
-`auth` right back for the `Identity` type — a real import cycle. Rather
-than invent a third package to hold just a context helper, the handler
-stays next to the rest of the auth flow it reads from. M03 can relocate it
-when it adds `PUT /users/me` and other profile-management endpoints.
+Both handlers live in `internal/auth`, not `internal/users`, despite the
+URL. `internal/auth` already depends on `internal/users` for the
+repository; putting the handlers in `internal/users` would require `users`
+to import `auth` right back for the `Identity` type — a real import cycle.
+Rather than invent a third package to hold just a context helper, they
+stay next to the rest of the auth flow they read from. This was
+reconsidered at the start of M03 and kept deliberately — see the M03
+report for the reasoning.
 
 ## Frontend
 

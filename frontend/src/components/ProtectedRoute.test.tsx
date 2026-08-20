@@ -3,30 +3,48 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 import type { AuthContextValue } from '../contexts/auth-context'
 import { useAuth } from '../hooks/useAuth'
+import type { UserProfile } from '../types/auth'
 import { ProtectedRoute } from './ProtectedRoute'
 
 vi.mock('../hooks/useAuth')
 
-function mockAuth(status: AuthContextValue['status']) {
+function mockAuth(status: AuthContextValue['status'], user: UserProfile | null = null) {
   vi.mocked(useAuth).mockReturnValue({
     status,
     token: null,
-    user: null,
+    user,
     login: vi.fn(),
     register: vi.fn(),
+    updateProfile: vi.fn(),
     logout: vi.fn(),
   })
 }
 
-function renderProtected() {
+function customer(): UserProfile {
+  return {
+    id: 'u1',
+    email: 'customer@example.com',
+    full_name: 'A Customer',
+    phone: null,
+    role: 'CUSTOMER',
+    created_at: '2026-01-01T00:00:00Z',
+  }
+}
+
+function admin(): UserProfile {
+  return { ...customer(), id: 'u2', email: 'admin@example.com', role: 'ADMIN' }
+}
+
+function renderProtected(roles?: UserProfile['role'][]) {
   return render(
-    <MemoryRouter initialEntries={['/app']}>
+    <MemoryRouter initialEntries={['/admin/agents']}>
       <Routes>
         <Route path="/login" element={<div>login page</div>} />
+        <Route path="/app" element={<div>account page</div>} />
         <Route
-          path="/app"
+          path="/admin/agents"
           element={
-            <ProtectedRoute>
+            <ProtectedRoute roles={roles}>
               <div>secret content</div>
             </ProtectedRoute>
           }
@@ -51,9 +69,22 @@ describe('ProtectedRoute', () => {
     expect(screen.queryByText('secret content')).toBeNull()
   })
 
-  it('renders the protected content when authenticated', () => {
-    mockAuth('authenticated')
+  it('renders the protected content when authenticated and no roles are required', () => {
+    mockAuth('authenticated', customer())
     renderProtected()
     expect(screen.getByText('secret content')).toBeTruthy()
+  })
+
+  it('renders the protected content when the user has a permitted role', () => {
+    mockAuth('authenticated', admin())
+    renderProtected(['ADMIN'])
+    expect(screen.getByText('secret content')).toBeTruthy()
+  })
+
+  it('redirects to /app when the user lacks the required role', () => {
+    mockAuth('authenticated', customer())
+    renderProtected(['ADMIN'])
+    expect(screen.getByText('account page')).toBeTruthy()
+    expect(screen.queryByText('secret content')).toBeNull()
   })
 })

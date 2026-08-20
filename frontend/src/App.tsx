@@ -2,6 +2,8 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { ProtectedRoute } from './components/ProtectedRoute'
 import { AuthProvider } from './contexts/AuthContext'
 import { Account } from './pages/Account'
+import { AgentsPage } from './pages/admin/AgentsPage'
+import { OperationsPage } from './pages/agent/OperationsPage'
 import { Home } from './pages/Home'
 import { LoginPage } from './pages/LoginPage'
 import { RegisterPage } from './pages/RegisterPage'
@@ -19,6 +21,22 @@ function App() {
             element={
               <ProtectedRoute>
                 <Account />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/agents"
+            element={
+              <ProtectedRoute roles={['ADMIN']}>
+                <AgentsPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/agent"
+            element={
+              <ProtectedRoute roles={['DELIVERY_AGENT']}>
+                <OperationsPage />
               </ProtectedRoute>
             }
           />
