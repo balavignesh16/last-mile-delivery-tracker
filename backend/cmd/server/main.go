@@ -90,7 +90,7 @@ func main() {
 		auth.Mount(usersRepo, cfg.JWTSecret),
 		agents.Mount(agentsRepo, cfg.JWTSecret),
 		zones.Mount(zonesRepo, cfg.JWTSecret),
-		rates.Mount(ratesRepo, cfg.JWTSecret),
+		rates.Mount(ratesRepo, zonesRepo, cfg.JWTSecret),
 	)
 	addr := net.JoinHostPort(cfg.ServerHost, cfg.ServerPort)
 	httpServer := &http.Server{

@@ -1,8 +1,8 @@
-// Package rates implements M05 — Rate Configuration: admin-managed rate
-// cards and their weight slabs. M06 — Rate Calculation Engine — will
-// extend this same package with the actual charge-calculation pipeline
-// (chargeable weight, slab selection, COD application, quoting); this
-// file and its siblings implement only M05's configuration surface.
+// Package rates implements M05 — Rate Configuration (admin-managed rate
+// cards and their weight slabs; this file and its siblings) and M06 —
+// Rate Calculation Engine (the actual charge-calculation pipeline —
+// chargeable weight, slab selection, COD application, quoting — see
+// pricing.go and quote_handler.go).
 //
 // Depends on internal/zones for ZoneRelationship (reused directly, never
 // redeclared — see zone_relationship.go) and internal/auth/internal/users
@@ -43,8 +43,8 @@ type RateCard struct {
 	OrderType        OrderType
 	ZoneRelationship ZoneRelationship
 	// CODSurcharge is a flat amount added to an order's charge when its
-	// payment type is COD. M05 only stores this value — applying it to
-	// an order's total is M06's job, not this package's, at this stage.
+	// payment type is COD. M05 stores this value; M06's CalculateQuote
+	// (pricing.go) is what actually applies it.
 	CODSurcharge float64
 	Active       bool
 	CreatedAt    time.Time
@@ -56,9 +56,8 @@ type RateCard struct {
 // at most one such Slab may exist per RateCard (enforced by a partial
 // unique index, see the 0007 migration).
 //
-// M05 only stores slabs. Selecting which slab matches a given
-// chargeable weight is M06's job — this package deliberately does not
-// implement that lookup, so M06's own tests are what first exercise it.
+// M05 only stores slabs; M06's SelectSlab (pricing.go) is what matches
+// one against a given chargeable weight.
 type Slab struct {
 	ID         string
 	RateCardID string

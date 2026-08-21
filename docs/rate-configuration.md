@@ -5,11 +5,14 @@
 M05 is the **admin configuration side** of pricing — it stores rate
 cards and their weight slabs, and enforces that configuration is
 internally consistent (no overlapping slabs, at most one active card per
-combination). It does **not** calculate anything: chargeable weight,
-slab selection for a given weight, and COD surcharge application are all
-M06's job (Rate Calculation Engine), a separate, later module. Every
-place this document says "M05 only stores X" means exactly that —
-consuming X to produce a price is out of scope here.
+combination). It does **not** calculate anything itself: chargeable
+weight, slab selection for a given weight, and COD surcharge application
+are M06's job (Rate Calculation Engine — now implemented, see
+`docs/rate-calculation.md`), which extends this same `internal/rates`
+package rather than duplicating its types or queries. Every place this
+document says "M05 only stores X" describes M05's own scope at the time
+it was written — M06's `CalculateQuote` (`pricing.go`) is what actually
+consumes each X to produce a price.
 
 ## Schema
 
@@ -202,18 +205,21 @@ the rate card named in the URL before acting — a slab addressed through
 the wrong rate card's URL gets `404`, identical to "doesn't exist,"
 never a more specific error.
 
-## Consumption by M06 (forward compatibility)
+## Consumption by M06
 
 `internal/rates.Repository` exposes `FindActiveCard(orderType,
-zoneRelationship)` specifically for M06 to call directly — the
-Go-level consumption point, not an HTTP endpoint (see "RBAC" above).
-`internal/rates` deliberately does **not** implement:
+zoneRelationship)` and `ListSlabsByRateCard(rateCardID)` as the Go-level
+consumption points M06's `CalculateQuote` calls directly (`pricing.go`)
+— not an HTTP endpoint (see "RBAC" above; still no scenario where
+`CUSTOMER` calls `/rates` itself). Everything M05 deliberately left
+unimplemented now lives in `internal/rates`'s M06 files rather than a
+separate package, exactly as this package's own doc comment always
+committed to:
 
-- chargeable-weight calculation (`max(actual, volumetric)`)
-- volumetric-weight calculation (`L × B × H ÷ 5000`)
-- selecting which slab matches a given chargeable weight
-- COD surcharge application to an order's total
-- any quote/pricing endpoint
+- chargeable-weight calculation (`max(actual, volumetric)`) — `pricing.go`
+- volumetric-weight calculation (`L × B × H ÷ 5000`) — `pricing.go`
+- selecting which slab matches a given chargeable weight — `SelectSlab`
+- COD surcharge application to an order's total — `CalculateQuote`
+- the quote endpoint — `POST /orders/quote`, `quote_handler.go`
 
-All of the above are M06's flagship responsibility per the blueprint's
-own module split, and are left entirely unimplemented here.
+See `docs/rate-calculation.md` for the full M06 design.

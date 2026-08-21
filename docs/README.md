@@ -27,6 +27,12 @@ Written so far:
   other config entity) can be deleted, one-active-card-per-combination,
   and the two concurrency mechanisms that protect activation and slab
   writes under real concurrent load (M05).
+- [`rate-calculation.md`](./rate-calculation.md) — the M06 quote engine:
+  volumetric/chargeable weight, the `[min, max)` slab-selection
+  algorithm, COD surcharge application, why nothing is persisted, the
+  narrow customer-facing zone/area read-RBAC widening it required, and
+  why `POST /orders/quote` is the one authoritative pricing path a later
+  order-confirmation step is expected to reuse (M06).
 
 The rest don't exist yet — the root [README.md](../README.md) carries each
 completed module's summary directly, and links into this directory as

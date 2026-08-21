@@ -10,17 +10,22 @@ with a React + TypeScript frontend, structured as a modular monolith.
 
 ## Current Status
 
-**M05 — Rate Configuration.** The backend now also has `rate_cards` and
-`rate_card_slabs` tables, admin-only CRUD for both (including slab
-deletion), and enforced invariants — at most one active card per
-`(order_type, zone_relationship)` combination, no overlapping slabs, at
-most one open-ended slab per card — verified under real concurrent
-requests against PostgreSQL, not just sequential tests. The frontend has
-an admin rate-card management screen. **This module only stores
-configuration; nothing calculates a price yet** — no chargeable-weight
-calculation, no slab selection, no COD application, no orders, no
-assignment algorithm, no tracking. Those arrive in M06 through M12, in
-order, each expanding this README and `docs/` as they land.
+**M06 — Rate Calculation Engine.** The backend can now calculate a full
+delivery quote: `POST /api/v1/orders/quote` resolves the pickup/drop
+areas (M04), determines INTRA/INTER, selects the active rate card and
+matching weight slab (M05), and returns volumetric weight, chargeable
+weight, base rate, COD surcharge, and final amount — all computed fresh
+on every call, never trusting a client-supplied price. Nothing is
+persisted; no order exists after calling this endpoint. `CUSTOMER` can
+now also read `GET /zones`, `GET /zones/{id}`, and `GET
+/zones/{zoneID}/areas` (previously admin-only) so they can pick a
+pickup/drop area — the one narrow M04 change this module required. The
+frontend has a quote form (pickup/drop area pickers, package details,
+full breakdown display) for both `CUSTOMER` and `ADMIN`. **Order
+creation, persistence, retrieval, and ownership are explicitly out of
+scope here** — those, along with assignment and tracking, arrive in M07
+through M12, in order, each expanding this README and `docs/` as they
+land.
 
 | Module | Status |
 |---|---|
@@ -29,7 +34,7 @@ order, each expanding this README and `docs/` as they land.
 | M03 — User & Agent Management | ✅ Done |
 | M04 — Zone Management | ✅ Done |
 | M05 — Rate Configuration | ✅ Done |
-| M06 — Rate Calculation Engine | Not started |
+| M06 — Rate Calculation Engine | ✅ Done |
 | M07 — Order Management | Not started |
 | M08 — Tracking & Order Lifecycle | Not started |
 | M09 — Assignment Engine | Not started |
@@ -318,8 +323,8 @@ examples are in [`docs/api.md`](docs/api.md). Short version:
   card.
 - **One active card per combination**: enforced by a partial unique
   index (`(order_type, zone_relationship) WHERE active`), not just
-  application code — this is what makes M06's future "select the rate
-  card" step deterministic.
+  application code — this is what makes M06's "select the rate card"
+  step (`FindActiveCard`) deterministic.
 - **Concurrency, proven under real load, not just asserted**: activating
   two cards for the same combination at once is resolved by the unique
   index itself (`TestConcurrentActivation_OnlyOneWins` fires simultaneous
@@ -329,9 +334,39 @@ examples are in [`docs/api.md`](docs/api.md). Short version:
   closing a check-then-insert race a plain read-then-write would leave
   open. Both tests run against real PostgreSQL with actual concurrent
   goroutines, not sequential calls.
-- **Out of scope, by design**: chargeable-weight calculation, slab
-  selection for a given weight, COD surcharge application, and any quote
-  endpoint — all M06.
+
+## Rate Calculation (M06)
+
+Full design detail (weight formula, unit assumptions, the `[min, max)`
+slab-selection algorithm and every boundary case, why nothing is
+persisted, the one M04 RBAC change this required) is in
+[`docs/rate-calculation.md`](docs/rate-calculation.md); endpoint
+reference is in [`docs/api.md`](docs/api.md). Short version:
+
+- **`POST /api/v1/orders/quote`** (ADMIN or CUSTOMER; DELIVERY_AGENT →
+  403) — the one authoritative pricing path. Resolves pickup/drop areas
+  via M04's `zones.ResolvePickupDrop`, selects the active rate card via
+  M05's `rates.FindActiveCard`, computes `volumetric = L×B×H÷5000`,
+  `chargeable = max(actual, volumetric)`, picks the matching slab, and
+  adds the COD surcharge only when `payment_type = COD`. Nothing is
+  persisted — calling this again always recomputes fresh, which is what
+  actually makes "never trust a client-supplied price" true rather than
+  just documented.
+- **No new database table.** M06 is pure calculation over M04/M05's
+  existing schema — extending `internal/rates` exactly as its own
+  package doc committed to since M05, not a new package.
+- **Mass-assignment protection**: the request has no field for anything
+  server-derived (`customer_id`, `pickup_zone_id`, `drop_zone_id`,
+  `zone_relationship`, `rate_card_id`, `volumetric_weight`,
+  `chargeable_weight`, `base_rate`, `cod_surcharge`, `final_amount`,
+  `status`) — sending one is rejected outright (422, unknown field).
+- **One narrow M04 change**: `GET /zones`, `GET /zones/{id}`, and `GET
+  /zones/{zoneID}/areas` now also admit `CUSTOMER` (previously
+  ADMIN-only), so a customer can pick a real pickup/drop area for a
+  quote. No mutation route changed.
+- **Out of scope, by design**: order creation/persistence, customer
+  ownership, order retrieval/listing, order status — all a later module.
+  `internal/orders` remains the reserved, empty placeholder it was in M01.
 
 ## Repository Structure
 
@@ -355,7 +390,7 @@ last-mile-delivery-tracker/
 │   │   ├── users/                # User domain model + Postgres repository, incl. Update (M02, M03)
 │   │   ├── agents/               # delivery_agents domain, repository (transactional creation), handlers, routes (M03)
 │   │   ├── zones/                # zones/areas domain, repository, resolution service, handlers, routes (M04)
-│   │   ├── rates/                # rate_cards/rate_card_slabs domain, concurrency-safe repository, handlers, routes (M05); M06 extends this package
+│   │   ├── rates/                # rate_cards/rate_card_slabs domain, concurrency-safe repository, handlers, routes (M05); pricing.go/quote_handler.go add the M06 calculation engine + POST /orders/quote
 │   │   ├── orders/                # M07 — reserved, empty
 │   │   ├── tracking/              # M08 — reserved, empty
 │   │   ├── assignment/            # M09 — reserved, empty
@@ -363,7 +398,7 @@ last-mile-delivery-tracker/
 │   │   └── notifications/         # M11 — reserved, empty
 │   ├── migrations/                # embedded SQL migrations (go:embed): 0001 users (M02), 0002 delivery_agents (M03),
 │   │                               #   0003 zones, 0004 areas, 0005 delivery_agents.current_zone_id FK (M04),
-│   │                               #   0006 rate_cards, 0007 rate_card_slabs (M05)
+│   │                               #   0006 rate_cards, 0007 rate_card_slabs (M05); M06 added none — pure calculation, no new schema
 │   └── tests/
 │       ├── unit/                  # convention note — unit tests are co-located with source
 │       ├── integration/           # DB-backed integration tests (build tag: integration)
@@ -375,11 +410,11 @@ last-mile-delivery-tracker/
 │   └── src/
 │       ├── components/            # Layout (role-aware nav), StatusBadge, ErrorBanner, ProtectedRoute (+roles)
 │       ├── pages/                 # Home, LoginPage, RegisterPage, Account (profile edit);
-│       │                          #   admin/AgentsPage, agent/OperationsPage (M03); admin/ZonesPage (M04); admin/RatesPage (M05)
-│       ├── services/              # api.ts (+apiPut, +apiDelete), health.ts, auth.ts (+updateProfile), agents.ts (M03), zones.ts (M04), rates.ts (M05)
+│       │                          #   admin/AgentsPage, agent/OperationsPage (M03); admin/ZonesPage (M04); admin/RatesPage (M05); QuotePage (M06)
+│       ├── services/              # api.ts (+apiPut, +apiDelete), health.ts, auth.ts (+updateProfile), agents.ts (M03), zones.ts (M04), rates.ts (M05), quote.ts (M06)
 │       ├── hooks/                 # useHealthCheck, useAuth
 │       ├── contexts/              # AuthContext.tsx (provider) + auth-context.ts (context object)
-│       ├── types/                 # HealthResponse, auth.ts (+ProfileUpdateInput), agent.ts (M03), zone.ts (M04), rate.ts (M05)
+│       ├── types/                 # HealthResponse, auth.ts (+ProfileUpdateInput), agent.ts (M03), zone.ts (M04), rate.ts (M05), quote.ts (M06)
 │       ├── test/                  # setup.ts — React Testing Library cleanup
 │       └── utils/                 # reserved — no shared utility yet
 │
@@ -388,7 +423,8 @@ last-mile-delivery-tracker/
 │   ├── authentication.md          # roles, schema, JWT, RBAC, token-storage tradeoff (M02)
 │   ├── user-agent-management.md   # delivery_agents schema, IDOR protection, M09 notes (M03)
 │   ├── zone-management.md         # zones/areas schema, resolution, INTRA/INTER, current_zone_id FK (M04)
-│   └── rate-configuration.md      # rate_cards/rate_card_slabs schema, boundaries, concurrency (M05)
+│   ├── rate-configuration.md      # rate_cards/rate_card_slabs schema, boundaries, concurrency (M05)
+│   └── rate-calculation.md        # quote engine: weight formula, slab selection, COD, RBAC widening (M06)
 │
 └── scripts/
     └── seed/                      # reserved for later modules' larger seed data (M02's demo users seed from main.go instead — see its README)

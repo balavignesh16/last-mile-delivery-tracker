@@ -137,12 +137,25 @@ nonexistent one is rejected, and `NULL` remains valid.
 
 ## RBAC
 
-Every zone/area endpoint is `ADMIN`-only — the task specification's
-default ("unless the assignment explicitly states otherwise"), and
-nothing states otherwise for M04. `CUSTOMER` and `DELIVERY_AGENT` both
-get `403`; unauthenticated requests get `401`. Verified in
+Every zone/area **mutation** endpoint is `ADMIN`-only — the task
+specification's default ("unless the assignment explicitly states
+otherwise"), and nothing states otherwise for M04.
+
+The three **read** endpoints (`GET /zones`, `GET /zones/{id}`, `GET
+/zones/{zoneID}/areas`) additionally admit `CUSTOMER`, a narrow M06
+change: a customer requesting a quote needs to pick a real pickup/drop
+area from a list, and M04 had no reason to anticipate that read need at
+the time. No mutation route was widened, and none of this module's Go
+code (handlers, resolution, repository) changed — only the RBAC
+middleware list in `routes.go`'s three `GET` registrations. See
+`docs/rate-calculation.md` for why this was necessary rather than
+optional.
+
+`DELIVERY_AGENT` gets `403` on every endpoint in this module, mutation
+or read; unauthenticated requests get `401` everywhere. Verified in
 `tests/integration/zones_integration_test.go`
-(`TestZoneEndpoints_RoleGating`, `TestAreaEndpoints_RoleGating`).
+(`TestZoneEndpoints_RoleGating`, `TestAreaEndpoints_RoleGating`,
+`TestAreaEndpoints_GetRoleGating`).
 
 ## Mass-assignment protection
 

@@ -146,14 +146,16 @@ func TestZoneEndpoints_RoleGating(t *testing.T) {
 		})
 	}
 
-	// GET /zones must also be admin-only.
+	// GET /zones is readable by ADMIN and CUSTOMER (M06: a customer must
+	// be able to list zones/areas to place an order) but still not
+	// DELIVERY_AGENT or an unauthenticated caller.
 	getCases := []struct {
 		label string
 		token string
 		want  int
 	}{
 		{"admin allowed", admin, http.StatusOK},
-		{"customer forbidden", customer, http.StatusForbidden},
+		{"customer allowed", customer, http.StatusOK},
 		{"delivery agent forbidden", agent, http.StatusForbidden},
 		{"unauthenticated rejected", "", http.StatusUnauthorized},
 	}
@@ -270,6 +272,44 @@ func TestAreaEndpoints_RoleGating(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.label, func(t *testing.T) {
 			rec := doJSON(router, http.MethodPost, "/api/v1/zones/"+zoneID+"/areas", tc.token, `{"name":"Blocked"}`)
+			if rec.Code != tc.want {
+				t.Errorf("status = %d, want %d", rec.Code, tc.want)
+			}
+		})
+	}
+}
+
+// TestAreaEndpoints_GetRoleGating covers the M06 RBAC widening
+// specifically: GET /zones/{zoneID}/areas (and, via
+// TestZoneEndpoints_RoleGating, GET /zones and GET /zones/{id}) must
+// admit CUSTOMER now, while every mutation route on this module stays
+// exactly as admin-only as M04 left it.
+func TestAreaEndpoints_GetRoleGating(t *testing.T) {
+	router, uRepo, _, _ := setupZonesTest(t)
+	admin := adminToken(t, uRepo)
+	customer := customerToken(t, uRepo)
+	agent := deliveryAgentToken(t, uRepo)
+
+	zoneRec := doJSON(router, http.MethodPost, "/api/v1/zones", admin, fmt.Sprintf(`{"name":%q}`, uniqueEmail("area-get-gating-zone")))
+	var zone map[string]any
+	if err := json.NewDecoder(zoneRec.Body).Decode(&zone); err != nil {
+		t.Fatalf("decode zone: %v", err)
+	}
+	zoneID, _ := zone["id"].(string)
+
+	cases := []struct {
+		label string
+		token string
+		want  int
+	}{
+		{"admin allowed", admin, http.StatusOK},
+		{"customer allowed", customer, http.StatusOK},
+		{"delivery agent forbidden", agent, http.StatusForbidden},
+		{"unauthenticated rejected", "", http.StatusUnauthorized},
+	}
+	for _, tc := range cases {
+		t.Run(tc.label, func(t *testing.T) {
+			rec := doJSON(router, http.MethodGet, "/api/v1/zones/"+zoneID+"/areas", tc.token, "")
 			if rec.Code != tc.want {
 				t.Errorf("status = %d, want %d", rec.Code, tc.want)
 			}

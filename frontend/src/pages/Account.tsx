@@ -113,6 +113,17 @@ export function Account() {
         </form>
       </div>
 
+      {(user.role === 'ADMIN' || user.role === 'CUSTOMER') && (
+        <div className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+          <h2 className="text-sm font-semibold text-slate-700">Deliveries</h2>
+          <p className="mt-1 text-sm text-slate-500">
+            <Link to="/quote" className="font-medium text-slate-900 underline">
+              Get a delivery quote
+            </Link>
+          </p>
+        </div>
+      )}
+
       {user.role === 'ADMIN' && (
         <div className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
           <h2 className="text-sm font-semibold text-slate-700">Admin</h2>

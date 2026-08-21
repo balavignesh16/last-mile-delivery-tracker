@@ -21,9 +21,10 @@ var ErrZoneInactive = errors.New("zone is inactive")
 // ResolveArea resolves a single area to its zone — the Address -> Area ->
 // Zone chain the frozen architecture specifies, minus "Address": this
 // project has no geocoding, so the caller supplies an area id directly
-// (e.g. one the customer picked from a list in M07's order form), never
-// a free-text address run through an external service. See the M04
-// report's STEP 9 discussion for why that boundary was chosen.
+// (e.g. one the customer picked from a list in M06's quote request, or
+// M07's later order form), never a free-text address run through an
+// external service. See the M04 report's STEP 9 discussion for why that
+// boundary was chosen.
 //
 // Returns ErrAreaNotFound if the area does not exist, ErrZoneInactive if
 // the area's zone has been deactivated, or a wrapped error if the area's

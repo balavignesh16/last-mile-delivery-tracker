@@ -22,12 +22,13 @@ import (
 )
 
 // setupRatesTest builds the exact same router main.go builds — real
-// Postgres, real migrations, real middleware, auth.Mount and
-// rates.Mount — so these tests exercise the full stack. Reuses
-// agentsIntegrationJWTSecret (and therefore adminToken/customerToken/
-// deliveryAgentToken/doJSON from agents_integration_test.go and
-// zones_integration_test.go) rather than minting a separate secret and
-// helper set for no reason.
+// Postgres, real migrations, real middleware, auth.Mount, zones.Mount,
+// and rates.Mount — so these tests exercise the full stack. zones.Mount
+// is included because rates.Mount now needs a zones.Repository for
+// POST /orders/quote (M06). Reuses agentsIntegrationJWTSecret (and
+// therefore adminToken/customerToken/deliveryAgentToken/doJSON from
+// agents_integration_test.go and zones_integration_test.go) rather than
+// minting a separate secret and helper set for no reason.
 func setupRatesTest(t *testing.T) (router http.Handler, usersRepo users.Repository, ratesRepo rates.Repository, pool *pgxpool.Pool) {
 	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
@@ -48,9 +49,11 @@ func setupRatesTest(t *testing.T) (router http.Handler, usersRepo users.Reposito
 
 	uRepo := users.NewPostgresRepository(p)
 	rRepo := rates.NewPostgresRepository(p)
+	zRepo := zones.NewPostgresRepository(p)
 	r := server.NewRouter(p, testLogger(),
 		auth.Mount(uRepo, agentsIntegrationJWTSecret),
-		rates.Mount(rRepo, agentsIntegrationJWTSecret),
+		zones.Mount(zRepo, agentsIntegrationJWTSecret),
+		rates.Mount(rRepo, zRepo, agentsIntegrationJWTSecret),
 	)
 	return r, uRepo, rRepo, p
 }

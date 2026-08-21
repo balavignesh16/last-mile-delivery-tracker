@@ -50,8 +50,8 @@ type Repository interface {
 	ListRateCards(ctx context.Context) ([]RateCard, error)
 	FindRateCardByID(ctx context.Context, id string) (RateCard, error)
 	UpdateRateCard(ctx context.Context, id string, update RateCardUpdate) (RateCard, error)
-	// FindActiveCard is the consumption point M06's calculation engine
-	// is expected to call directly (Go-level, not HTTP — see
+	// FindActiveCard is the consumption point M06's CalculateQuote
+	// (pricing.go) calls directly (Go-level, not HTTP — see
 	// docs/rate-configuration.md for why there is no public "resolve"
 	// endpoint, the same reasoning M04 used for zone resolution).
 	FindActiveCard(ctx context.Context, orderType OrderType, zoneRelationship ZoneRelationship) (RateCard, error)

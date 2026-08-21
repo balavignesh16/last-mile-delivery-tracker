@@ -8,6 +8,7 @@ import { ZonesPage } from './pages/admin/ZonesPage'
 import { OperationsPage } from './pages/agent/OperationsPage'
 import { Home } from './pages/Home'
 import { LoginPage } from './pages/LoginPage'
+import { QuotePage } from './pages/QuotePage'
 import { RegisterPage } from './pages/RegisterPage'
 
 function App() {
@@ -55,6 +56,14 @@ function App() {
             element={
               <ProtectedRoute roles={['DELIVERY_AGENT']}>
                 <OperationsPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/quote"
+            element={
+              <ProtectedRoute roles={['ADMIN', 'CUSTOMER']}>
+                <QuotePage />
               </ProtectedRoute>
             }
           />

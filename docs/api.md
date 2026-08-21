@@ -204,12 +204,14 @@ Sets `current_lat`, `current_lng`, and `location_updated_at` (from the database'
 
 ---
 
-## Zones and areas (M04)
+## Zones and areas (M04, read access widened in M06)
 
 Geographic configuration: `zones` are the top-level unit, `areas` belong to
-exactly one zone. Every endpoint below is **ADMIN only** — see
-`docs/zone-management.md` for the full design (hierarchy, resolution,
-INTRA/INTER, why there's no DELETE).
+exactly one zone. Every mutation endpoint below is **ADMIN only**; the three
+`GET` endpoints are **ADMIN or CUSTOMER** (widened in M06 so a customer can
+pick a pickup/drop area when requesting a quote — see
+`docs/zone-management.md`'s RBAC section for the full reasoning). `DELIVERY_AGENT`
+gets `403` on every endpoint in this section.
 
 ### `POST /api/v1/zones`
 
@@ -229,15 +231,15 @@ curl -X POST http://localhost:8080/api/v1/zones \
 
 ### `GET /api/v1/zones`
 
-**Auth**: required, **ADMIN only**. **Purpose**: list every zone, active or not — no filter for "active only" exists yet.
+**Auth**: required, **ADMIN or CUSTOMER**. **Purpose**: list every zone, active or not — no filter for "active only" exists yet.
 
 ```bash
-curl http://localhost:8080/api/v1/zones -H "Authorization: Bearer $ADMIN_TOKEN"
+curl http://localhost:8080/api/v1/zones -H "Authorization: Bearer $TOKEN"
 ```
 
 ### `GET /api/v1/zones/{id}`
 
-**Auth**: required, **ADMIN only**. **Errors**: `404` if unknown.
+**Auth**: required, **ADMIN or CUSTOMER**. **Errors**: `404` if unknown.
 
 ### `PUT /api/v1/zones/{id}`
 
@@ -269,7 +271,7 @@ curl -X POST http://localhost:8080/api/v1/zones/$ZONE_ID/areas \
 
 ### `GET /api/v1/zones/{zoneID}/areas`
 
-**Auth**: required, **ADMIN only**. **Purpose**: list the areas belonging to one zone. `404` if the zone itself doesn't exist (distinct from `200` with an empty array, which means the zone exists but has no areas yet — the frontend needs that distinction for its empty state).
+**Auth**: required, **ADMIN or CUSTOMER**. **Purpose**: list the areas belonging to one zone — this is what populates the pickup/drop area pickers on the M06 quote form. `404` if the zone itself doesn't exist (distinct from `200` with an empty array, which means the zone exists but has no areas yet — the frontend needs that distinction for its empty state).
 
 ### `PUT /api/v1/zones/{zoneID}/areas/{areaID}`
 
@@ -288,7 +290,9 @@ endpoint below is **ADMIN only**, including `GET` — see
 boundary convention, concurrency, why cards can't be deleted but slabs
 can). **These endpoints only store configuration — no calculation
 happens here.** Selecting a slab for a chargeable weight, applying COD
-surcharge, and producing a quote are all M06.
+surcharge, and producing a quote are all M06 (`POST /orders/quote`,
+below) — the customer never sees a rate card or slab directly, only the
+quote they produce.
 
 ### `POST /api/v1/rates`
 
@@ -362,6 +366,47 @@ A chargeable weight in `[min_weight, max_weight)` costs exactly `price` — a fl
 
 ---
 
+## Rate calculation / quotes (M06)
+
+Given pickup/drop areas, package dimensions, actual weight, order type,
+and payment type, calculates the exact charge a customer would pay —
+zone resolution (M04) → rate card selection (M05) → volumetric/chargeable
+weight → slab selection → COD surcharge. See `docs/rate-calculation.md`
+for the full design (weight formula, `[min, max)` slab-selection
+algorithm, why nothing is persisted here).
+
+### `POST /api/v1/orders/quote`
+
+**Auth**: required, **ADMIN or CUSTOMER** (`DELIVERY_AGENT` → `403`). **Purpose**: calculate a quote. Stateless — nothing is created or persisted; calling this twice with the same input always recomputes fresh against whatever rate configuration is active right now. The request body has no field for anything the backend derives itself (`customer_id`, `pickup_zone_id`, `drop_zone_id`, `zone_relationship`, `rate_card_id`, `volumetric_weight`, `chargeable_weight`, `base_rate`, `cod_surcharge`, `final_amount`, `status`) — sending one is rejected outright (`422`, unknown field), the same fail-closed pattern every other module in this API uses.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/orders/quote \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"pickup_area_id":"...","drop_area_id":"...","order_type":"B2C","payment_type":"COD","length_cm":10,"breadth_cm":10,"height_cm":10,"actual_weight_kg":7}'
+```
+
+```json
+{
+  "pickup_area_id": "...", "pickup_zone_id": "...",
+  "drop_area_id": "...", "drop_zone_id": "...",
+  "zone_relationship": "INTRA",
+  "order_type": "B2C", "payment_type": "COD",
+  "length_cm": 10, "breadth_cm": 10, "height_cm": 10, "actual_weight_kg": 7,
+  "volumetric_weight_kg": 0.2, "chargeable_weight_kg": 7,
+  "rate_card_id": "...",
+  "base_rate": 80, "cod_surcharge": 20, "final_amount": 100
+}
+```
+
+Dimensions are assumed centimeters, weight kilograms — the universal
+convention for the `L × B × H ÷ 5000` volumetric formula, though never
+stated explicitly in the source documents (flagged, not invented, in
+`docs/rate-calculation.md`).
+
+**Errors**: `401`, `403` (`DELIVERY_AGENT` or unauthenticated), `422` for every one of: malformed body, unknown field, non-positive/non-finite dimension or weight, invalid `order_type`/`payment_type`, an unknown `pickup_area_id`/`drop_area_id`, a pickup/drop area whose zone is inactive, no active rate card for the resolved `(order_type, zone_relationship)`, or no slab covering the calculated chargeable weight.
+
+---
+
 ## What's not here yet
 
-Orders, tracking, assignment, rescheduling, notifications, and dashboards — M06 through M12. This file grows with each module.
+Order creation/persistence/retrieval, tracking, assignment, rescheduling, notifications, and dashboards — M07 through M12. This file grows with each module.
