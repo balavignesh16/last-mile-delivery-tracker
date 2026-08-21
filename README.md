@@ -10,25 +10,28 @@ with a React + TypeScript frontend, structured as a modular monolith.
 
 ## Current Status
 
-**M07 — Order Management.** Orders can now be created, listed, and
-retrieved. `POST /api/v1/orders` builds a `rates.QuoteInput` from the
-request and calls M06's `rates.CalculateQuote` directly — the exact same
-function `POST /orders/quote` calls — then persists the returned
-`QuoteResult` as an immutable pricing snapshot; no pricing logic is
-duplicated anywhere in this module. A `CUSTOMER` can only create/view
-their own orders (identity always comes from the JWT, never the request
-body); an `ADMIN` can create an order on behalf of any real `CUSTOMER`
-account (validated by id and role before being trusted) and can
-retrieve any order. `GET /orders/{id}` returns `404`, never `403`, for
-an order a `CUSTOMER` doesn't own. Every order starts `status =
-'CREATED'` — this module writes nothing else; status transitions are
-M08's job. The frontend has a create-order flow (preview a quote, then
-confirm — confirming is a second, independent call that recomputes
-pricing server-side), an order list, and an order detail page, for both
-`CUSTOMER` and `ADMIN`. **Status transitions, agent assignment,
-tracking, and notifications are explicitly out of scope here** — those
-arrive in M08 through M12, in order, each expanding this README and
-`docs/` as they land.
+**M08 — Tracking & Order Lifecycle.** Orders now have a real status
+state machine: `POST /api/v1/orders/:id/status` validates and applies
+one legal transition (`CREATED → ASSIGNED → PICKED_UP → IN_TRANSIT →
+OUT_FOR_DELIVERY → {DELIVERED | FAILED → RESCHEDULED → ASSIGNED}`,
+`DELIVERED` terminal, every other pair — including same-status and the
+blueprint's own `CREATED → DELIVERED` counterexample — rejected `409`),
+and `GET /api/v1/orders/:id/tracking` returns the full, immutable,
+chronological event history. Authorization is per-edge, not per-route:
+`ADMIN` may perform any transition, `DELIVERY_AGENT` only the five
+agent-tier ones, `CUSTOMER` none. Concurrent conflicting transitions on
+the same order are serialized by a `SELECT ... FOR UPDATE` lock — proven
+under real concurrent load, not just asserted. Order creation itself
+(M07) now writes the order's opening `CREATED` tracking event
+atomically, inside the same transaction as the order row. The frontend
+adds a tracking timeline to the order detail page (both `CUSTOMER` and
+`ADMIN`) and an `ADMIN`-only status-transition control. **Agent
+assignment, reschedule-date capture, and notifications are explicitly
+out of scope here** — no `assigned_agent_id` column or assignment logic
+was added; `DELIVERY_AGENT` transition authority is deliberately
+unscoped in this module (documented, temporary) until M09 supplies that
+relationship. Those arrive in M09 through M12, in order, each expanding
+this README and `docs/` as they land.
 
 | Module | Status |
 |---|---|
@@ -39,7 +42,7 @@ arrive in M08 through M12, in order, each expanding this README and
 | M05 — Rate Configuration | ✅ Done |
 | M06 — Rate Calculation Engine | ✅ Done |
 | M07 — Order Management | ✅ Done |
-| M08 — Tracking & Order Lifecycle | Not started |
+| M08 — Tracking & Order Lifecycle | ✅ Done |
 | M09 — Assignment Engine | Not started |
 | M10 — Failed Delivery & Rescheduling | Not started |
 | M11 — Notification Service | Not started |
@@ -402,16 +405,64 @@ reference is in [`docs/api.md`](docs/api.md). Short version:
   order's stored amount. `rate_card_id` is stored (rate cards are
   deactivate-only, never deleted); `slab_id` deliberately is not (M05
   allows slab deletion, and nothing else may reference one by FK).
-- **One new table, no new migration elsewhere**: `orders` (migration
-  `0008`), 20 columns, 7 foreign keys, 8 CHECK constraints matching the
-  full M08 status enum (schema-only — this module writes only
-  `CREATED`). No `packages` table — dimensions are inline columns, so
-  order creation is a single `INSERT` after pricing completes; no
-  transaction needed.
-- **Out of scope, by design**: status transitions (`PUT
-  /orders/{id}/status` does not exist), agent assignment, tracking,
-  order filtering by status/zone/agent, order editing/cancellation —
-  all later modules.
+- **One new table**: `orders` (migration `0008`), 20 columns, 7 foreign
+  keys, 8 CHECK constraints matching the full M08 status enum
+  (schema-only at the time — M07 itself only ever wrote `CREATED`). No
+  `packages` table — dimensions are inline columns on `orders`.
+- **Updated by M08**: `CreateOrder` now runs inside a transaction — not
+  for `packages` (still doesn't exist), but because order creation must
+  also atomically write its own opening tracking event (see below).
+- **Out of scope, by design**: order filtering by status/zone/agent,
+  order editing/cancellation — later modules. Status transitions
+  themselves are M08, immediately below.
+
+## Order Tracking (M08)
+
+Full design detail (the state machine, the per-edge authorization
+matrix, the concurrency proof, why order creation writes the first
+tracking event) is in
+[`docs/order-tracking.md`](docs/order-tracking.md); endpoint reference
+is in [`docs/api.md`](docs/api.md). Short version:
+
+- **`POST /api/v1/orders/:id/status`** (ADMIN or DELIVERY_AGENT;
+  CUSTOMER → 403) — validates one transition against a closed 8-edge
+  table (`CREATED→ASSIGNED→PICKED_UP→IN_TRANSIT→OUT_FOR_DELIVERY→
+  {DELIVERED|FAILED→RESCHEDULED→ASSIGNED}`, `DELIVERED` terminal),
+  checks the caller's role is authorized for that *specific* edge (not
+  just the route), updates `orders.status`, and inserts an immutable
+  `order_tracking_events` row — all inside one transaction, under a
+  `SELECT ... FOR UPDATE` lock on the order.
+- **Authorization is per-edge, not per-role-per-route**: ADMIN is
+  authorized on all 8 edges; DELIVERY_AGENT only on the 5 agent-tier
+  ones (`ASSIGNED→PICKED_UP` through `OUT_FOR_DELIVERY→{DELIVERED,
+  FAILED}`); CUSTOMER on none. A DELIVERY_AGENT attempting
+  `CREATED→ASSIGNED` or `FAILED→RESCHEDULED` gets `403` even though the
+  route itself admits their role.
+- **Known, documented, temporary gap**: no `assigned_agent_id` exists
+  yet (that's M09's own `POST /orders/:id/assign`) — so any
+  authenticated DELIVERY_AGENT may perform an agent-tier edge on *any*
+  order, not only one assigned to them. A finalized M08 decision, not
+  an oversight; M09 tightens this once the assignment relationship
+  exists.
+- **`GET /api/v1/orders/:id/tracking`** (ADMIN any order; CUSTOMER own
+  only, `404` otherwise; DELIVERY_AGENT → 403) — the full,
+  chronological event history. The first entry always has
+  `previous_status: null` — order creation itself is the first
+  tracking event, written atomically by `internal/orders.CreateOrder`.
+- **Concurrency, proven under real load**: two conflicting transitions
+  fired simultaneously at the same order (`OUT_FOR_DELIVERY→DELIVERED`
+  vs. `OUT_FOR_DELIVERY→FAILED`) — exactly one commits, the other gets
+  `409`, verified by `TestConcurrentTransition_OnlyOneWins` (real
+  goroutines, real Postgres) and by firing two real, simultaneous curl
+  requests manually.
+- **One new table, no `orders` schema change**: `order_tracking_events`
+  (migration `0009`) — `orders.status`'s CHECK constraint already
+  covered the full M08 value set since M07, so no `ALTER` was needed.
+  No `assigned_agent_id`, no `slab_id`. Genuinely append-only — no
+  update/delete route exists for this table at all.
+- **Out of scope, by design**: agent assignment/auto-assignment,
+  reschedule-date capture, notifications, status/zone/agent filtering,
+  any agent-facing order list/detail UI — all later modules.
 
 ## Repository Structure
 
@@ -437,18 +488,18 @@ last-mile-delivery-tracker/
 │   │   ├── zones/                # zones/areas domain, repository, resolution service, handlers, routes (M04)
 │   │   ├── rates/                # rate_cards/rate_card_slabs domain, concurrency-safe repository, handlers, routes (M05); pricing.go/quote_handler.go add the M06 calculation engine + POST /orders/quote
 │   │   ├── orders/                # orders domain, repository, handlers, routes (M07) — calls rates.CalculateQuote, never reimplements pricing
-│   │   ├── tracking/              # M08 — reserved, empty
+│   │   ├── tracking/              # status state machine, order_tracking_events domain, repository, handlers, routes (M08)
 │   │   ├── assignment/            # M09 — reserved, empty
 │   │   ├── rescheduling/          # M10 — reserved, empty
 │   │   └── notifications/         # M11 — reserved, empty
 │   ├── migrations/                # embedded SQL migrations (go:embed): 0001 users (M02), 0002 delivery_agents (M03),
 │   │                               #   0003 zones, 0004 areas, 0005 delivery_agents.current_zone_id FK (M04),
 │   │                               #   0006 rate_cards, 0007 rate_card_slabs (M05); M06 added none — pure calculation, no new schema;
-│   │                               #   0008 orders (M07)
+│   │                               #   0008 orders (M07); 0009 order_tracking_events (M08, no ALTER to orders)
 │   └── tests/
 │       ├── unit/                  # convention note — unit tests are co-located with source
 │       ├── integration/           # DB-backed integration tests (build tag: integration)
-│       └── e2e/                   # reserved — full-stack flow tests start around M08/M09
+│       └── e2e/                   # reserved — full-stack flow tests start around M09
 │
 ├── frontend/
 │   ├── package.json
@@ -457,11 +508,11 @@ last-mile-delivery-tracker/
 │       ├── components/            # Layout (role-aware nav), StatusBadge, ErrorBanner, ProtectedRoute (+roles), AreaPicker (M06, shared with M07)
 │       ├── pages/                 # Home, LoginPage, RegisterPage, Account (profile edit);
 │       │                          #   admin/AgentsPage, agent/OperationsPage (M03); admin/ZonesPage (M04); admin/RatesPage (M05); QuotePage (M06);
-│       │                          #   CreateOrderPage, OrdersPage, OrderDetailPage (M07)
-│       ├── services/              # api.ts (+apiPut, +apiDelete), health.ts, auth.ts (+updateProfile), agents.ts (M03), zones.ts (M04), rates.ts (M05), quote.ts (M06), orders.ts (M07)
+│       │                          #   CreateOrderPage, OrdersPage, OrderDetailPage (M07; +tracking timeline & admin transition control, M08)
+│       ├── services/              # api.ts (+apiPut, +apiDelete), health.ts, auth.ts (+updateProfile), agents.ts (M03), zones.ts (M04), rates.ts (M05), quote.ts (M06), orders.ts (M07), tracking.ts (M08)
 │       ├── hooks/                 # useHealthCheck, useAuth
 │       ├── contexts/              # AuthContext.tsx (provider) + auth-context.ts (context object)
-│       ├── types/                 # HealthResponse, auth.ts (+ProfileUpdateInput), agent.ts (M03), zone.ts (M04), rate.ts (M05), quote.ts (M06), order.ts (M07)
+│       ├── types/                 # HealthResponse, auth.ts (+ProfileUpdateInput), agent.ts (M03), zone.ts (M04), rate.ts (M05), quote.ts (M06), order.ts (M07), tracking.ts (M08)
 │       ├── test/                  # setup.ts — React Testing Library cleanup
 │       └── utils/                 # currency.ts (formatCurrency, shared M06/M07)
 │
@@ -472,7 +523,8 @@ last-mile-delivery-tracker/
 │   ├── zone-management.md         # zones/areas schema, resolution, INTRA/INTER, current_zone_id FK (M04)
 │   ├── rate-configuration.md      # rate_cards/rate_card_slabs schema, boundaries, concurrency (M05)
 │   ├── rate-calculation.md        # quote engine: weight formula, slab selection, COD, RBAC widening (M06)
-│   └── order-management.md        # orders schema, ownership, pricing snapshot, CalculateQuote reuse (M07)
+│   ├── order-management.md        # orders schema, ownership, pricing snapshot, CalculateQuote reuse (M07)
+│   └── order-tracking.md          # state machine, per-edge authorization, concurrency proof, initial event (M08)
 │
 └── scripts/
     └── seed/                      # reserved for later modules' larger seed data (M02's demo users seed from main.go instead — see its README)

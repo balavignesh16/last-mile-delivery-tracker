@@ -130,20 +130,33 @@ The blueprint's own ER diagram shows `orders` and `packages` as
 separate entities, but nothing in the actual order flow implies more
 than one package per order — there's no "add another package" step
 anywhere in the source documents. Dimensions and weight are inline
-columns on `orders` instead, which has a real consequence: order
-creation is a single `INSERT` after `CalculateQuote` returns, so no
-transaction is needed to keep two tables in sync. The read step
-(`CalculateQuote`) is entirely separate from and prior to the one write.
+columns on `orders` instead — the pricing side of order creation
+(`CalculateQuote`, then the `INSERT` of the priced row) never needed a
+second table to stay in sync with.
+
+**Updated by M08**: `CreateOrder` does now run inside a transaction —
+not because of `packages`, but because M08 requires order creation to
+also record its own opening tracking event (see "Status" below). The
+`INSERT INTO orders` and the paired `INSERT INTO order_tracking_events`
+must succeed or fail together; this is the one transaction M07's own
+design note said wouldn't be needed, added later by a different,
+unrelated requirement.
 
 ## Status
 
 Every order is created with `status = 'CREATED'` — the only value this
-module ever writes. The full M08 state-machine value set
-(`ASSIGNED`, `PICKED_UP`, `IN_TRANSIT`, `OUT_FOR_DELIVERY`, `DELIVERED`,
-`FAILED`, `RESCHEDULED`) already exists in the `orders.status` `CHECK`
-constraint (migration `0008`) so M08 doesn't need a schema migration
-just to widen it, but no transition logic, and no
-`PUT /orders/{id}/status` endpoint, exists in this module.
+module writes directly to `orders.status`. The full M08 state-machine
+value set (`ASSIGNED`, `PICKED_UP`, `IN_TRANSIT`, `OUT_FOR_DELIVERY`,
+`DELIVERED`, `FAILED`, `RESCHEDULED`) already existed in the
+`orders.status` `CHECK` constraint since migration `0008`, so M08
+needed no schema change to `orders` itself to add its transitions.
+
+**M08 is now implemented** — `POST /api/v1/orders/:id/status`
+transitions an order (state-machine-validated, role-authorized per
+edge) and `GET /api/v1/orders/:id/tracking` returns its full event
+history. `internal/orders` still only ever writes `CREATED`; every
+later transition belongs to `internal/tracking`. See
+`docs/order-tracking.md` for the full M08 design.
 
 ## Security model
 

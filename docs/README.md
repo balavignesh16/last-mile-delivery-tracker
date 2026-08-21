@@ -39,6 +39,12 @@ Written so far:
   orders but `slab_id` isn't), why every order starts and only M07 ever
   writes `CREATED`, and exactly how order creation reuses M06's
   `rates.CalculateQuote` without a second pricing implementation (M07).
+- [`order-tracking.md`](./order-tracking.md) — the M08 state machine
+  (every legal edge and why every other pair is rejected), the per-edge
+  authorization matrix, the `SELECT ... FOR UPDATE` concurrency
+  mechanism and its proof, why order creation itself writes the first
+  tracking event, the `order_tracking_events` schema, and exactly what
+  was deliberately left to M09/M10/M11 (M08).
 
 The rest don't exist yet — the root [README.md](../README.md) carries each
 completed module's summary directly, and links into this directory as

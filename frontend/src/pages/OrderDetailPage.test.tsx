@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AuthContextValue } from '../contexts/auth-context'
@@ -12,18 +12,18 @@ function jsonResponse(status: number, body: unknown): Response {
   return { ok: status >= 200 && status < 300, status, json: async () => body } as Response
 }
 
-function mockAuth() {
+function mockAuth(role: 'CUSTOMER' | 'ADMIN' = 'CUSTOMER') {
   const user: UserProfile = {
     id: 'customer-1',
     email: 'customer@example.com',
     full_name: 'Customer',
     phone: null,
-    role: 'CUSTOMER',
+    role,
     created_at: '2026-01-01T00:00:00Z',
   }
   vi.mocked(useAuth).mockReturnValue({
     status: 'authenticated',
-    token: 'customer-token',
+    token: 'test-token',
     user,
     login: vi.fn(),
     register: vi.fn(),
@@ -57,6 +57,18 @@ const order = {
   created_at: '2026-08-21T10:00:00Z',
 }
 
+const events = [
+  {
+    id: 'event-1',
+    order_id: 'order-1',
+    previous_status: null,
+    new_status: 'CREATED',
+    actor_id: 'customer-1',
+    metadata: null,
+    created_at: '2026-08-21T10:00:00Z',
+  },
+]
+
 function renderAt(path: string) {
   return render(
     <MemoryRouter initialEntries={[path]}>
@@ -67,6 +79,17 @@ function renderAt(path: string) {
   )
 }
 
+function fetchRouter(orderStatus = 404, orderBody: unknown = { error: 'order not found' }, eventsBody: unknown = events) {
+  return vi.fn((input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url === '/api/v1/orders/order-1') return Promise.resolve(jsonResponse(200, order))
+    if (url === '/api/v1/orders/order-1/tracking') return Promise.resolve(jsonResponse(200, eventsBody))
+    if (url === '/api/v1/orders/not-mine') return Promise.resolve(jsonResponse(orderStatus, orderBody))
+    if (url === '/api/v1/orders/not-mine/tracking') return Promise.resolve(jsonResponse(orderStatus, orderBody))
+    return Promise.reject(new Error(`unexpected fetch: ${url}`))
+  })
+}
+
 describe('OrderDetailPage', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -74,7 +97,7 @@ describe('OrderDetailPage', () => {
 
   it('loads and displays the full order breakdown', async () => {
     mockAuth()
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, order)))
+    vi.stubGlobal('fetch', fetchRouter())
 
     renderAt('/orders/order-1')
 
@@ -82,15 +105,143 @@ describe('OrderDetailPage', () => {
     expect(screen.getByText('INTER')).toBeTruthy()
     expect(screen.getByText('₹60.00')).toBeTruthy()
     expect(screen.getByText('₹15.00')).toBeTruthy()
-    expect(screen.getByText('CREATED')).toBeTruthy()
+    expect(screen.getByText('CREATED', { selector: 'span' })).toBeTruthy()
   })
 
   it('shows a not-found message for an order that does not exist or is not owned by the caller', async () => {
     mockAuth()
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(404, { error: 'order not found' })))
+    vi.stubGlobal('fetch', fetchRouter())
 
     renderAt('/orders/not-mine')
 
-    await waitFor(() => expect(screen.getByText('order not found')).toBeTruthy())
+    await waitFor(() => expect(screen.getAllByText('order not found').length).toBeGreaterThan(0))
+  })
+
+  it('renders the tracking timeline', async () => {
+    mockAuth()
+    vi.stubGlobal('fetch', fetchRouter())
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByText('CREATED', { selector: 'p' })).toBeTruthy())
+    expect(screen.getByText(/Actor: customer-1/)).toBeTruthy()
+  })
+
+  it('shows the empty-timeline state when there are no events', async () => {
+    mockAuth()
+    vi.stubGlobal('fetch', fetchRouter(200, order, []))
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByText('No tracking events yet.')).toBeTruthy())
+  })
+
+  it('shows a tracking error banner on failure', async () => {
+    mockAuth()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url === '/api/v1/orders/order-1') return Promise.resolve(jsonResponse(200, order))
+        if (url === '/api/v1/orders/order-1/tracking') return Promise.resolve(jsonResponse(500, { error: 'could not load tracking history' }))
+        return Promise.reject(new Error(`unexpected fetch: ${url}`))
+      }),
+    )
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByText('could not load tracking history')).toBeTruthy())
+  })
+
+  it('does not show status-update controls to a CUSTOMER', async () => {
+    mockAuth('CUSTOMER')
+    vi.stubGlobal('fetch', fetchRouter())
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByText('₹75.00')).toBeTruthy())
+    expect(screen.queryByText('Update status')).toBeNull()
+  })
+
+  it('shows only the legal next-status buttons to an ADMIN', async () => {
+    mockAuth('ADMIN')
+    vi.stubGlobal('fetch', fetchRouter())
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByText('Update status')).toBeTruthy())
+    // order.status is CREATED -> only ASSIGNED is a legal next status.
+    expect(screen.getByRole('button', { name: 'Mark as ASSIGNED' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Mark as DELIVERED/ })).toBeNull()
+  })
+
+  it('admin transition posts to the status endpoint and refreshes order + timeline', async () => {
+    mockAuth('ADMIN')
+    const assignedOrder = { ...order, status: 'ASSIGNED' }
+    const assignedEvents = [...events, { ...events[0], id: 'event-2', previous_status: 'CREATED', new_status: 'ASSIGNED', actor_id: 'admin-1' }]
+
+    let transitioned = false
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/v1/orders/order-1/status' && init?.method === 'POST') {
+        transitioned = true
+        return Promise.resolve(jsonResponse(201, assignedEvents[1]))
+      }
+      if (url === '/api/v1/orders/order-1') return Promise.resolve(jsonResponse(200, transitioned ? assignedOrder : order))
+      if (url === '/api/v1/orders/order-1/tracking') return Promise.resolve(jsonResponse(200, transitioned ? assignedEvents : events))
+      return Promise.reject(new Error(`unexpected fetch: ${url}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Mark as ASSIGNED' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Mark as ASSIGNED' }))
+
+    await waitFor(() => expect(screen.getByText('ASSIGNED', { selector: 'span' })).toBeTruthy())
+
+    const statusCall = fetchMock.mock.calls.find(([url]) => String(url) === '/api/v1/orders/order-1/status')
+    expect(statusCall).toBeTruthy()
+    const [, init] = statusCall as [string, RequestInit]
+    expect(JSON.parse(init.body as string)).toEqual({ status: 'ASSIGNED' })
+  })
+
+  it('shows an error banner when a transition is rejected', async () => {
+    mockAuth('ADMIN')
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/v1/orders/order-1/status' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse(409, { error: "this status transition is not permitted from the order's current status" }))
+      }
+      if (url === '/api/v1/orders/order-1') return Promise.resolve(jsonResponse(200, order))
+      if (url === '/api/v1/orders/order-1/tracking') return Promise.resolve(jsonResponse(200, events))
+      return Promise.reject(new Error(`unexpected fetch: ${url}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Mark as ASSIGNED' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Mark as ASSIGNED' }))
+
+    await waitFor(() => expect(screen.getByText("this status transition is not permitted from the order's current status")).toBeTruthy())
+  })
+
+  it('shows a terminal-state message for a DELIVERED order (ADMIN view)', async () => {
+    mockAuth('ADMIN')
+    const deliveredOrder = { ...order, status: 'DELIVERED' }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url === '/api/v1/orders/order-1') return Promise.resolve(jsonResponse(200, deliveredOrder))
+        if (url === '/api/v1/orders/order-1/tracking') return Promise.resolve(jsonResponse(200, events))
+        return Promise.reject(new Error(`unexpected fetch: ${url}`))
+      }),
+    )
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByText('This order is in a terminal state — no further transitions are possible.')).toBeTruthy())
   })
 })

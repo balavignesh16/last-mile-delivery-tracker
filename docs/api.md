@@ -457,7 +457,7 @@ sending any of them is rejected outright (`422`, unknown field).
 
 ### `GET /api/v1/orders`
 
-**Auth**: required, **ADMIN or CUSTOMER**. **Purpose**: list orders — every order for `ADMIN`, only the caller's own for `CUSTOMER`. No query-parameter filters (by status, zone, or agent) — nothing in this milestone produces fields worth filtering on yet; every order is `CREATED` and none has an assigned agent until M08/M09 land.
+**Auth**: required, **ADMIN or CUSTOMER**. **Purpose**: list orders — every order for `ADMIN`, only the caller's own for `CUSTOMER`. No query-parameter filters (by status, zone, or agent) — not in the M07/M08 endpoint list; filtering by agent still isn't meaningful until M09 adds agent assignment.
 
 ```bash
 curl http://localhost:8080/api/v1/orders -H "Authorization: Bearer $TOKEN"
@@ -473,6 +473,57 @@ Response: a JSON array of the same shape `POST /orders` returns.
 
 ---
 
+## Order tracking (M08)
+
+The order status state machine and its immutable event log. Pricing,
+persistence, and ownership stay exactly as M06/M07 left them — this
+section only adds status transitions and their history. See
+`docs/order-tracking.md` for the full design (the state diagram, the
+per-edge authorization matrix, the concurrency mechanism, why the
+initial `CREATED` event is written by order creation itself).
+
+### `POST /api/v1/orders/:id/status`
+
+**Auth**: required, **ADMIN or DELIVERY_AGENT** (`CUSTOMER` → `403` — customers have no status-transition authority in this module). **Purpose**: perform one legal state transition. Which of `ADMIN`/`DELIVERY_AGENT` may use a given edge depends on the edge itself, not just the route — see the authorization matrix in `docs/order-tracking.md`. `DELIVERY_AGENT` authority is temporarily unscoped: no `assigned_agent_id` relationship exists until M09, so any authenticated agent may perform an agent-tier edge on any order (a documented, finalized M08 decision, not an oversight).
+
+```bash
+curl -X POST http://localhost:8080/api/v1/orders/$ORDER_ID/status \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"status":"PICKED_UP"}'
+```
+
+```json
+{
+  "id": "...", "order_id": "...",
+  "previous_status": "ASSIGNED", "new_status": "PICKED_UP",
+  "actor_id": "...", "metadata": null,
+  "created_at": "2026-08-21T13:27:07Z"
+}
+```
+
+`metadata` is an optional, free-form JSON object, stored verbatim —
+no required shape is enforced.
+
+The request body has no field for anything server-derived (`id`,
+`order_id`, `actor_id`, `previous_status`, `created_at`) — sending any
+of them is rejected outright (`422`, unknown field).
+
+**Errors**: `401`, `403` (`CUSTOMER`, unauthenticated, or a role not authorized for this specific edge), `404` (unknown order id), `409` (the requested status is a recognized value but not a legal transition from the order's current status — including a same-status no-op, which is never legal), `422` (malformed body, unknown field, or a status string that isn't one of the eight recognized values).
+
+### `GET /api/v1/orders/:id/tracking`
+
+**Auth**: required, **ADMIN or CUSTOMER** (`DELIVERY_AGENT` → `403`, matching M07's blanket "agents have no order visibility yet" stance). **Purpose**: the full, chronological (oldest first) event history for one order. `ADMIN` may view any order; `CUSTOMER` only their own.
+
+```bash
+curl http://localhost:8080/api/v1/orders/$ORDER_ID/tracking -H "Authorization: Bearer $TOKEN"
+```
+
+Response: a JSON array of the same event shape `POST .../status` returns. The first entry always has `"previous_status": null` — order creation itself is the first tracking event.
+
+**Errors**: `401`, `403` (`DELIVERY_AGENT`), `404` (unknown id, or a `CUSTOMER` requesting an order they don't own — same hide-existence convention as `GET /orders/{id}`).
+
+---
+
 ## What's not here yet
 
-Order status transitions, tracking, agent assignment, rescheduling, notifications, and dashboards — M08 through M12. This file grows with each module.
+Agent assignment, reschedule-date capture, notifications, and dashboards — M09 through M12. This file grows with each module.

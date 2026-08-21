@@ -18,11 +18,16 @@ var ErrOrderNotFound = errors.New("order not found")
 // module in this project uses.
 type Repository interface {
 	// CreateOrder persists input.Quote exactly as given — see
-	// CreateOrderInput's doc. A single INSERT: no transaction is needed
-	// because there is no second table to keep in sync (no packages
-	// table — see docs/order-management.md) and CalculateQuote has
-	// already completed by the time this is called, so nothing here
-	// re-reads or re-derives pricing.
+	// CreateOrderInput's doc — and, in the same transaction, records the
+	// order's first tracking event (NULL -> CREATED, actor =
+	// input.CreatedBy). M08 added this second write: the blueprint's own
+	// tracking example opens an order's timeline with a CREATED entry,
+	// so order creation has to produce one itself rather than starting
+	// an order with an empty history. Every *later* transition is
+	// M08's own job (internal/tracking's Transition), not this method's
+	// — this is the one, single exception where internal/orders writes
+	// to order_tracking_events directly, for the one event that only
+	// order creation itself can know about.
 	CreateOrder(ctx context.Context, input CreateOrderInput) (Order, error)
 	// ListOrdersForCustomer returns one customer's own orders, newest
 	// first — the CUSTOMER-facing view of GET /orders.
@@ -51,12 +56,26 @@ const orderColumns = `
 	status, created_at`
 
 // CreateOrder writes every pricing-derived column directly from
-// input.Quote (a rates.QuoteResult) — this is the only place an orders
-// row is ever written, and it never independently computes any of
-// zone_relationship, volumetric_weight_kg, chargeable_weight_kg,
+// input.Quote (a rates.QuoteResult) — it never independently computes
+// any of zone_relationship, volumetric_weight_kg, chargeable_weight_kg,
 // rate_card_id, base_rate, cod_surcharge, or final_amount. status is
-// always StatusCreated; this module writes no other value.
+// always StatusCreated; this method writes no other status value.
+//
+// Runs inside a transaction (added for M08): the INSERT into orders and
+// the paired INSERT into order_tracking_events (previous_status = NULL,
+// new_status = 'CREATED', actor_id = input.CreatedBy) must succeed or
+// fail together — an order can never exist without its own opening
+// tracking event, and no tracking event can reference an order that
+// doesn't exist. This is the one place internal/orders writes to
+// order_tracking_events directly; every later transition belongs to
+// internal/tracking (M08), never here.
 func (r *PostgresRepository) CreateOrder(ctx context.Context, input CreateOrderInput) (Order, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return Order{}, fmt.Errorf("begin order creation transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
 	q := input.Quote
 	const stmt = `
 		INSERT INTO orders (
@@ -68,7 +87,7 @@ func (r *PostgresRepository) CreateOrder(ctx context.Context, input CreateOrderI
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
 		RETURNING ` + orderColumns
 
-	o, err := scanOrder(r.pool.QueryRow(ctx, stmt,
+	o, err := scanOrder(tx.QueryRow(ctx, stmt,
 		input.CustomerID, input.CreatedBy, q.OrderType, q.PaymentType,
 		q.PickupArea.ID, q.DropArea.ID, q.PickupZone.ID, q.DropZone.ID, q.ZoneRelationship,
 		q.LengthCM, q.BreadthCM, q.HeightCM, q.ActualWeightKG,
@@ -77,6 +96,17 @@ func (r *PostgresRepository) CreateOrder(ctx context.Context, input CreateOrderI
 	))
 	if err != nil {
 		return Order{}, fmt.Errorf("create order: %w", err)
+	}
+
+	const eventStmt = `
+		INSERT INTO order_tracking_events (order_id, previous_status, new_status, actor_id, metadata)
+		VALUES ($1, NULL, $2, $3, NULL)`
+	if _, err := tx.Exec(ctx, eventStmt, o.ID, StatusCreated, input.CreatedBy); err != nil {
+		return Order{}, fmt.Errorf("record initial tracking event: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Order{}, fmt.Errorf("commit order creation: %w", err)
 	}
 	return o, nil
 }

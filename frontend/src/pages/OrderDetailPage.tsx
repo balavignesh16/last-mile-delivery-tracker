@@ -6,19 +6,37 @@ import { StatusBadge } from '../components/StatusBadge'
 import { useAuth } from '../hooks/useAuth'
 import { ApiError } from '../services/api'
 import { getOrder } from '../services/orders'
+import { getOrderTracking, transitionOrderStatus } from '../services/tracking'
 import type { Order } from '../types/order'
+import { LEGAL_TRANSITIONS, type TrackingEvent } from '../types/tracking'
 import { formatCurrency } from '../utils/currency'
+
+function badgeState(status: string): 'ok' | 'error' | 'loading' {
+  if (status === 'DELIVERED') return 'ok'
+  if (status === 'FAILED') return 'error'
+  return 'loading'
+}
 
 // GET /orders/{id} returns 404 (never 403) for an order a CUSTOMER
 // doesn't own — this page can't tell "doesn't exist" apart from "isn't
 // yours" and doesn't try to; both render the same not-found message.
+// GET /orders/{id}/tracking uses the identical ownership convention
+// (M08), so the same ErrorBanner covers both loads.
 export function OrderDetailPage() {
   const { id } = useParams<{ id: string }>()
-  const { token } = useAuth()
+  const { token, user } = useAuth()
+  const isAdmin = user?.role === 'ADMIN'
 
   const [order, setOrder] = useState<Order | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  const [events, setEvents] = useState<TrackingEvent[]>([])
+  const [eventsLoading, setEventsLoading] = useState(true)
+  const [eventsError, setEventsError] = useState<string | null>(null)
+
+  const [transitionError, setTransitionError] = useState<string | null>(null)
+  const [transitioning, setTransitioning] = useState<string | null>(null)
 
   useEffect(() => {
     if (!token || !id) return
@@ -38,6 +56,40 @@ export function OrderDetailPage() {
     }
   }, [token, id])
 
+  useEffect(() => {
+    if (!token || !id) return
+    let cancelled = false
+    getOrderTracking(token, id)
+      .then((list) => {
+        if (!cancelled) setEvents(list)
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setEventsError(err instanceof ApiError ? err.message : 'Could not load the tracking timeline.')
+      })
+      .finally(() => {
+        if (!cancelled) setEventsLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [token, id])
+
+  async function handleTransition(status: string) {
+    if (!token || !id) return
+    setTransitionError(null)
+    setTransitioning(status)
+    try {
+      await transitionOrderStatus(token, id, { status: status as Order['status'] })
+      const [updatedOrder, updatedEvents] = await Promise.all([getOrder(token, id), getOrderTracking(token, id)])
+      setOrder(updatedOrder)
+      setEvents(updatedEvents)
+    } catch (err) {
+      setTransitionError(err instanceof ApiError ? err.message : 'Could not update the order status.')
+    } finally {
+      setTransitioning(null)
+    }
+  }
+
   return (
     <Layout>
       <Link to="/orders" className="text-sm text-slate-500 hover:text-slate-800">
@@ -52,7 +104,7 @@ export function OrderDetailPage() {
           <>
             <div className="flex items-center justify-between">
               <h1 className="text-xl font-semibold">Order {order.id}</h1>
-              <StatusBadge label={order.status} state={order.status === 'DELIVERED' ? 'ok' : order.status === 'FAILED' ? 'error' : 'loading'} />
+              <StatusBadge label={order.status} state={badgeState(order.status)} />
             </div>
 
             <dl className="mt-6 grid grid-cols-2 gap-x-6 gap-y-4 text-sm sm:grid-cols-3">
@@ -103,7 +155,55 @@ export function OrderDetailPage() {
                 <dd className="font-medium text-slate-900">{new Date(order.created_at).toLocaleString()}</dd>
               </div>
             </dl>
+
+            {isAdmin && (
+              <div className="mt-6 border-t border-slate-100 pt-6">
+                <h2 className="text-sm font-semibold text-slate-700">Update status</h2>
+                <ErrorBanner message={transitionError} />
+                {LEGAL_TRANSITIONS[order.status].length === 0 ? (
+                  <p className="mt-2 text-sm text-slate-500">This order is in a terminal state — no further transitions are possible.</p>
+                ) : (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {LEGAL_TRANSITIONS[order.status].map((next) => (
+                      <button
+                        key={next}
+                        type="button"
+                        onClick={() => void handleTransition(next)}
+                        disabled={transitioning !== null}
+                        className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                      >
+                        {transitioning === next ? 'Updating…' : `Mark as ${next}`}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </>
+        )}
+      </div>
+
+      <div className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+        <h2 className="text-sm font-semibold text-slate-700">Tracking timeline</h2>
+        <ErrorBanner message={eventsError} />
+        {eventsLoading ? (
+          <p className="mt-3 text-sm text-slate-500">Loading…</p>
+        ) : events.length === 0 ? (
+          <p className="mt-3 text-sm text-slate-500">No tracking events yet.</p>
+        ) : (
+          <ol className="mt-4 space-y-3">
+            {events.map((event) => (
+              <li key={event.id} className="flex items-start justify-between border-l-2 border-slate-200 pl-3 text-sm">
+                <div>
+                  <p className="font-medium text-slate-900">
+                    {event.previous_status ? `${event.previous_status} → ${event.new_status}` : event.new_status}
+                  </p>
+                  <p className="text-xs text-slate-500">Actor: {event.actor_id}</p>
+                </div>
+                <span className="whitespace-nowrap text-xs text-slate-400">{new Date(event.created_at).toLocaleString()}</span>
+              </li>
+            ))}
+          </ol>
         )}
       </div>
     </Layout>
