@@ -7,8 +7,10 @@ M08 owns the order status state machine and its immutable event log —
 /api/v1/orders/:id/tracking` (retrieve the full history). It does not
 own pricing (M06), order persistence/ownership (M07), agent assignment
 (M09 — now implemented, see `docs/assignment-engine.md`, without
-modifying anything in this module), or reschedule-date capture (M10 —
-not yet built). See "What this module deliberately does not do" below.
+modifying anything in this module), or reschedule capture (M10 — now
+implemented, see `docs/failed-delivery.md`, also without modifying
+anything in this module). See "What this module deliberately does not
+do" below.
 
 ## State machine
 
@@ -189,10 +191,13 @@ examples. In short:
   `TransitionTx` for the `CREATED→ASSIGNED`/`RESCHEDULED→ASSIGNED`
   writes rather than duplicating them — M08 remains the only place
   that validates a transition or writes `orders.status`.
-- No reschedule-date capture, no customer-initiated reschedule request
-  flow — M10 (`POST /orders/:id/reschedule`,
-  `GET /orders/:id/reschedules`). M08 only needs the
-  `FAILED → RESCHEDULED` *edge* to be legal and loggable.
+- No reschedule-request persistence, no customer-initiated reschedule
+  authorization — M10 (`POST /orders/:id/reschedule`, `GET
+  /orders/:id/reschedules`, see `docs/failed-delivery.md`). M08 only
+  ever needed the `FAILED → RESCHEDULED` *edge* to already be legal and
+  loggable, which it already was before M10 existed; M10 calls into
+  this module's own `TransitionTx` for that write rather than
+  duplicating it, the same reuse precedent M09 set.
 - No email/SMS notification on any transition — M11.
 - No status/zone/agent filtering on any listing endpoint, no analytics
   or dashboard views over tracking events.

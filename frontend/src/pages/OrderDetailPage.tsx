@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { Layout } from '../components/Layout'
@@ -8,9 +8,11 @@ import { assignOrder, autoAssignOrder } from '../services/assignment'
 import { ApiError } from '../services/api'
 import { listAgents } from '../services/agents'
 import { getOrder } from '../services/orders'
+import { getReschedules, rescheduleOrder } from '../services/rescheduling'
 import { getOrderTracking, transitionOrderStatus } from '../services/tracking'
 import type { Agent } from '../types/agent'
 import type { Order } from '../types/order'
+import type { Reschedule } from '../types/reschedule'
 import { LEGAL_TRANSITIONS, type TrackingEvent } from '../types/tracking'
 import { formatCurrency } from '../utils/currency'
 
@@ -35,11 +37,14 @@ export function OrderDetailPage() {
   const { id } = useParams<{ id: string }>()
   const { token, user } = useAuth()
   const isAdmin = user?.role === 'ADMIN'
+  const isCustomer = user?.role === 'CUSTOMER'
   // GET /orders/:id/tracking is ADMIN/CUSTOMER only — unchanged by M09,
   // deliberately not widened to DELIVERY_AGENT (see
   // docs/order-tracking.md) — so this page must not even attempt the
   // call for an agent viewer, let alone show its 403 as an error.
-  const canViewTracking = user?.role === 'ADMIN' || user?.role === 'CUSTOMER'
+  // GET /orders/:id/reschedules (M10) uses the identical ADMIN/CUSTOMER
+  // scope, so the same flag gates both.
+  const canViewTracking = isAdmin || isCustomer
 
   const [order, setOrder] = useState<Order | null>(null)
   const [loading, setLoading] = useState(true)
@@ -57,6 +62,16 @@ export function OrderDetailPage() {
   const [assignmentError, setAssignmentError] = useState<string | null>(null)
   const [assignmentSuccess, setAssignmentSuccess] = useState<string | null>(null)
   const [assigning, setAssigning] = useState(false)
+
+  const [reschedules, setReschedules] = useState<Reschedule[]>([])
+  const [reschedulesLoading, setReschedulesLoading] = useState(canViewTracking)
+  const [reschedulesError, setReschedulesError] = useState<string | null>(null)
+
+  const [requestedDate, setRequestedDate] = useState('')
+  const [reason, setReason] = useState('')
+  const [rescheduleError, setRescheduleError] = useState<string | null>(null)
+  const [rescheduleSuccess, setRescheduleSuccess] = useState<string | null>(null)
+  const [rescheduling, setRescheduling] = useState(false)
 
   useEffect(() => {
     if (!token || !id) return
@@ -114,6 +129,24 @@ export function OrderDetailPage() {
     }
   }, [token, isAdmin])
 
+  useEffect(() => {
+    if (!token || !id || !canViewTracking) return
+    let cancelled = false
+    getReschedules(token, id)
+      .then((list) => {
+        if (!cancelled) setReschedules(list)
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setReschedulesError(err instanceof ApiError ? err.message : 'Could not load the reschedule history.')
+      })
+      .finally(() => {
+        if (!cancelled) setReschedulesLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [token, id, canViewTracking])
+
   async function refreshOrderAndTracking() {
     if (!token || !id) return
     const [updatedOrder, updatedEvents] = await Promise.all([getOrder(token, id), getOrderTracking(token, id)])
@@ -151,6 +184,27 @@ export function OrderDetailPage() {
       setAssignmentError(err instanceof ApiError ? err.message : 'Could not auto-assign this order.')
     } finally {
       setAssigning(false)
+    }
+  }
+
+  async function handleReschedule(e: FormEvent) {
+    e.preventDefault()
+    if (!token || !id) return
+    setRescheduleError(null)
+    setRescheduleSuccess(null)
+    setRescheduling(true)
+    try {
+      await rescheduleOrder(token, id, { requested_date: requestedDate, reason: reason.trim() === '' ? undefined : reason })
+      const [updatedOrder, updatedReschedules] = await Promise.all([getOrder(token, id), getReschedules(token, id)])
+      setOrder(updatedOrder)
+      setReschedules(updatedReschedules)
+      setRescheduleSuccess('Reschedule request submitted.')
+      setRequestedDate('')
+      setReason('')
+    } catch (err) {
+      setRescheduleError(err instanceof ApiError ? err.message : 'Could not reschedule this order.')
+    } finally {
+      setRescheduling(false)
     }
   }
 
@@ -290,6 +344,56 @@ export function OrderDetailPage() {
               </div>
             )}
 
+            {(isAdmin || isCustomer) && (order.status === 'FAILED' || rescheduleSuccess || rescheduleError) && (
+              <div className="mt-6 border-t border-slate-100 pt-6">
+                <h2 className="text-sm font-semibold text-slate-700">Reschedule delivery</h2>
+                <ErrorBanner message={rescheduleError} />
+                {rescheduleSuccess && (
+                  <div role="status" className="mt-2 rounded-md border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm text-emerald-800">
+                    {rescheduleSuccess}
+                  </div>
+                )}
+                {order.status === 'FAILED' && (
+                  <form onSubmit={(e) => void handleReschedule(e)} className="mt-3 flex flex-wrap items-end gap-2">
+                    <div>
+                      <label htmlFor="requested-date" className="block text-xs font-medium text-slate-500">
+                        New delivery date
+                      </label>
+                      <input
+                        id="requested-date"
+                        type="date"
+                        required
+                        value={requestedDate}
+                        onChange={(e) => setRequestedDate(e.target.value)}
+                        disabled={rescheduling}
+                        className="mt-1 rounded-md border border-slate-300 px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="reschedule-reason" className="block text-xs font-medium text-slate-500">
+                        Reason (optional)
+                      </label>
+                      <input
+                        id="reschedule-reason"
+                        type="text"
+                        value={reason}
+                        onChange={(e) => setReason(e.target.value)}
+                        disabled={rescheduling}
+                        className="mt-1 rounded-md border border-slate-300 px-3 py-2 text-sm"
+                      />
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={rescheduling || !requestedDate}
+                      className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+                    >
+                      {rescheduling ? 'Rescheduling…' : 'Reschedule'}
+                    </button>
+                  </form>
+                )}
+              </div>
+            )}
+
             {isAdmin && (
               <div className="mt-6 border-t border-slate-100 pt-6">
                 <h2 className="text-sm font-semibold text-slate-700">Update status</h2>
@@ -336,6 +440,31 @@ export function OrderDetailPage() {
                   <p className="text-xs text-slate-500">Actor: {event.actor_id}</p>
                 </div>
                 <span className="whitespace-nowrap text-xs text-slate-400">{new Date(event.created_at).toLocaleString()}</span>
+              </li>
+            ))}
+          </ol>
+        )}
+      </div>
+      )}
+
+      {canViewTracking && (
+      <div className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+        <h2 className="text-sm font-semibold text-slate-700">Reschedule history</h2>
+        <ErrorBanner message={reschedulesError} />
+        {reschedulesLoading ? (
+          <p className="mt-3 text-sm text-slate-500">Loading…</p>
+        ) : reschedules.length === 0 ? (
+          <p className="mt-3 text-sm text-slate-500">No reschedule requests yet.</p>
+        ) : (
+          <ol className="mt-4 space-y-3">
+            {reschedules.map((re) => (
+              <li key={re.id} className="flex items-start justify-between border-l-2 border-slate-200 pl-3 text-sm">
+                <div>
+                  <p className="font-medium text-slate-900">New date: {re.requested_date}</p>
+                  {re.reason && <p className="text-xs text-slate-500">Reason: {re.reason}</p>}
+                  <p className="text-xs text-slate-500">Requested by: {re.requested_by}</p>
+                </div>
+                <span className="whitespace-nowrap text-xs text-slate-400">{new Date(re.created_at).toLocaleString()}</span>
               </li>
             ))}
           </ol>

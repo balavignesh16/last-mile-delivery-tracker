@@ -10,34 +10,37 @@ with a React + TypeScript frontend, structured as a modular monolith.
 
 ## Current Status
 
-**M09 — Assignment Engine.** Orders can now be assigned a delivery
-agent, manually or automatically: `POST /api/v1/orders/:id/assign`
-(admin names an agent, `{"agent_id": "<uuid>"}`) and `POST
-/api/v1/orders/:id/auto-assign` (no body — the engine picks). Both are
-`ADMIN`-only and go through M08's own `TransitionTx` for the actual
-`→ASSIGNED` status write — M09 never reimplements the state machine or
-its per-edge authorization. Eligibility is one rule (`active`,
-`AVAILABLE`, a resolvable `current_zone_id`), reused identically by both
-paths. Auto-assignment ranks eligible candidates deterministically:
-same-zone before cross-zone, then `last_assigned_at` ascending
-(`NULL` — never assigned — first), then agent UUID as a final,
-unconditional tiebreak; **no geographic-distance ranking** — no
-coordinate data exists anywhere in the schema for orders or zones, only
-for an agent's own last-reported location, which nothing resolves a
-pickup point against. Four concurrency races (two admins racing the
-same order, manual racing auto-assign, two orders racing the same
-agent, assignment racing an unrelated M08 transition) are closed by
-consistent-order row locking plus a partial unique index backstop
-(`orders.assigned_agent_id`, one active assignment per agent) — proven
-against real concurrent Postgres load, repeated to rule out flakiness.
-No new table: assignment history lives in M08's own tracking-event
-metadata. `GET /orders` and `GET /orders/:id` widen to admit
-`DELIVERY_AGENT`, scoped strictly to their own assigned orders; the
-frontend gains a "My assigned orders" view and, for `ADMIN`, manual/
-auto-assign controls on the order detail page. **Reschedule-date
-capture and notifications are explicitly out of scope here** — those
-arrive in M10 and M11, each expanding this README and `docs/` as they
-land.
+**M10 — Failed Delivery & Rescheduling.** A `FAILED` order can now be
+rescheduled: `POST /api/v1/orders/:id/reschedule` (`CUSTOMER`, own order
+only, or `ADMIN`, any order — body `{"requested_date": "YYYY-MM-DD",
+"reason": "optional"}`) and `GET /api/v1/orders/:id/reschedules` (the
+same two roles). This resolves a real architectural tension without
+touching M08: the product requirement is "a customer can reschedule,"
+but M08's own, unmodified authorization matrix permits only `ADMIN` on
+the underlying `FAILED → RESCHEDULED` edge. M10's own handler
+authorizes the call independently (ownership or admin), then invokes
+M08's `TransitionTx` asserting its own authority — while still recording
+the *real* caller's user id as `actor_id`, never a role name, so the
+permanent tracking record stays honest about who actually asked. Zero
+lines changed in `internal/tracking`. A dedicated `reschedule_requests`
+table (`requested_date`, `reason`, `requested_by`, `created_at` — no
+approval workflow, no status column: a reschedule is immediately
+effective) persists each request alongside the paired tracking event's
+own metadata. The delivery agent servicing a failed order is freed back
+to `AVAILABLE` as part of the reschedule transaction (agent-then-order
+lock ordering, reused from M09, so the two modules can't deadlock);
+`assigned_agent_id` itself is deliberately left unchanged, a historical
+snapshot until a later, *separate* `POST /orders/:id/assign`/
+`auto-assign` call overwrites it — M10 never calls into M09's own
+ranking code. No `delivery_attempts` table: failure reason travels in
+the existing `FAILED` event's own metadata (already-supported, unmodified
+M08 behavior), and "attempt number" is derived by counting `→ASSIGNED`
+transitions in an order's own tracking history rather than stored as a
+mutable counter. The frontend adds a "Reschedule delivery" control
+(native `<input type="date">`, no new dependency) and a reschedule-history
+section to the order detail page, visible to `CUSTOMER`/`ADMIN` only.
+**Notifications are explicitly out of scope here** — M11 sends them;
+M10 only makes the events they'd react to exist and be queryable.
 
 | Module | Status |
 |---|---|
@@ -50,7 +53,7 @@ land.
 | M07 — Order Management | ✅ Done |
 | M08 — Tracking & Order Lifecycle | ✅ Done |
 | M09 — Assignment Engine | ✅ Done |
-| M10 — Failed Delivery & Rescheduling | Not started |
+| M10 — Failed Delivery & Rescheduling | ✅ Done |
 | M11 — Notification Service | Not started |
 | M12 — Dashboards & Evaluation Layer | Not started |
 
@@ -521,10 +524,84 @@ reference is in [`docs/api.md`](docs/api.md). Short version:
   assigned agent and, for ADMIN on an assignable order, manual (agent
   picker, reusing M03's `GET /agents`) and auto-assign controls with
   success/error states.
-- **Out of scope, by design**: reschedule-date capture, notifications,
-  dashboards, geographic-distance infrastructure, an assignment-history
-  table, a candidate-preview endpoint, and any change to M08's own
-  state machine or authorization.
+- **Out of scope, by design**: reschedule-request handling (now M10,
+  below), notifications, dashboards, geographic-distance infrastructure,
+  an assignment-history table, a candidate-preview endpoint, and any
+  change to M08's own state machine or authorization.
+
+## Failed Delivery & Rescheduling (M10)
+
+Full design detail (the architectural mismatch between "customer can
+reschedule" and M08's ADMIN-only transition matrix and how it's
+resolved without modifying M08, the `reschedule_requests` schema,
+agent-availability behavior after a failure, why no `delivery_attempts`
+table exists) is in
+[`docs/failed-delivery.md`](docs/failed-delivery.md); endpoint reference
+is in [`docs/api.md`](docs/api.md). Short version:
+
+- **`POST /api/v1/orders/:id/reschedule`** (CUSTOMER, own order only, or
+  ADMIN, any order — DELIVERY_AGENT `403`) — reschedule a `FAILED` order.
+  Body: `{"requested_date": "YYYY-MM-DD", "reason": "optional"}`.
+  Returns the updated order (`status: RESCHEDULED`).
+- **The architectural mismatch, resolved additively**: M08's own,
+  unmodified authorization matrix permits only ADMIN on
+  `FAILED→RESCHEDULED`, but the product requirement is customer-
+  initiated rescheduling. `RescheduleHandler` is M10's own,
+  independent authorization gate (ownership or admin, checked before
+  M08 is ever called); `Repository.Reschedule` then calls M08's
+  `TransitionTx` asserting `RoleAdmin` — a value TransitionTx's own
+  check consumes but never persists — while passing the *real* caller's
+  user id as the separate `actorID` parameter, which *is* what lands in
+  `order_tracking_events.actor_id`. Authorization and identity are two
+  parameters, not one; zero lines changed in `internal/tracking`.
+- **Reschedule persistence**: a dedicated `reschedule_requests` table
+  (migration `0011`) — `order_id`, `requested_by`, `requested_date`,
+  `reason`, `created_at`. Deliberately no status/approval columns: a
+  reschedule is immediately effective, there is no pending/approved/
+  rejected workflow. The same `requested_date`/`reason` also land in the
+  paired `RESCHEDULED` tracking event's own metadata.
+- **Failure reason**: no new mechanism needed — M08's own
+  `transitionRequest.metadata` already accepted arbitrary context on
+  every transition, including `OUT_FOR_DELIVERY→FAILED`, before M10
+  existed. `{"status":"FAILED","metadata":{"failure_reason":"..."}}`
+  against the existing, unmodified `POST /orders/:id/status` already
+  worked; M10 verified, tested, and documented it rather than building
+  something new.
+- **Agent availability after failure**: the previously assigned agent is
+  freed to `AVAILABLE` as part of M10's own reschedule transaction (not
+  at the instant `FAILED` is set — that transition still goes through
+  M08's own endpoint, which this module doesn't hook or wrap). Lock
+  ordering matches M09 exactly (agent row first, then the order row via
+  `TransitionTx`), which is what rules out a cross-module deadlock.
+  `assigned_agent_id` itself is deliberately never cleared — a
+  historical snapshot until a later, separate M09 assignment call
+  overwrites it.
+- **Reassignment stays M09's job**: M10 never calls
+  `assignment.Repository` and never ranks candidates. After a
+  reschedule, the order simply sits at `RESCHEDULED`, exactly the status
+  `RESCHEDULED→ASSIGNED` (M09, unmodified) already knew how to consume —
+  a *separate*, subsequent `POST /orders/:id/assign`/`auto-assign` call,
+  the same two-step pattern `CREATED`→(separate)→`ASSIGNED` already
+  uses. A freed agent is reconsidered on exactly the same eligibility/
+  ranking terms as any other agent — no special-casing.
+- **No `delivery_attempts` table**: failure reason lives in the
+  existing `FAILED` event's metadata; "attempt number" is derived by
+  counting `→ASSIGNED` transitions in an order's own tracking history at
+  read time, never a stored, mutable counter.
+- **Concurrency, proven under real load**: two reschedule requests
+  racing the same `FAILED` order, and a reschedule racing an unrelated
+  M09 assignment attempt for consistent lock-ordering deadlock safety —
+  both closed by the same `SELECT ... FOR UPDATE` + transaction pattern
+  every prior module uses, verified with real concurrent goroutines,
+  repeated (`-count=5`).
+- **Frontend**: `OrderDetailPage` gains a "Reschedule delivery" section
+  (native `<input type="date">`, no new dependency; visible to
+  CUSTOMER/ADMIN when `status === FAILED`) and a "Reschedule history"
+  section (same ADMIN/CUSTOMER scope as the tracking timeline).
+- **Out of scope, by design**: an approval/rejection workflow, a
+  reschedule-cancellation endpoint, a `delivery_attempts` table,
+  automatic reassignment, notifications, dashboards, and any change to
+  M08's or M09's own code.
 
 ## Repository Structure
 
@@ -552,13 +629,13 @@ last-mile-delivery-tracker/
 │   │   ├── orders/                # orders domain, repository, handlers, routes (M07) — calls rates.CalculateQuote, never reimplements pricing
 │   │   ├── tracking/              # status state machine, order_tracking_events domain, repository, handlers, routes (M08)
 │   │   ├── assignment/            # candidate ranking, eligibility, repository (reuses tracking.TransitionTx), handlers, routes (M09)
-│   │   ├── rescheduling/          # M10 — reserved, empty
+│   │   ├── rescheduling/          # reschedule domain/validation, repository (reuses tracking.TransitionTx, frees the previous agent), handlers, routes (M10)
 │   │   └── notifications/         # M11 — reserved, empty
 │   ├── migrations/                # embedded SQL migrations (go:embed): 0001 users (M02), 0002 delivery_agents (M03),
 │   │                               #   0003 zones, 0004 areas, 0005 delivery_agents.current_zone_id FK (M04),
 │   │                               #   0006 rate_cards, 0007 rate_card_slabs (M05); M06 added none — pure calculation, no new schema;
 │   │                               #   0008 orders (M07); 0009 order_tracking_events (M08, no ALTER to orders);
-│   │                               #   0010 orders.assigned_agent_id + indexes (M09)
+│   │                               #   0010 orders.assigned_agent_id + indexes (M09); 0011 reschedule_requests (M10)
 │   └── tests/
 │       ├── unit/                  # convention note — unit tests are co-located with source
 │       ├── integration/           # DB-backed integration tests (build tag: integration)
@@ -572,11 +649,12 @@ last-mile-delivery-tracker/
 │       ├── pages/                 # Home, LoginPage, RegisterPage, Account (profile edit);
 │       │                          #   admin/AgentsPage, agent/OperationsPage (M03); admin/ZonesPage (M04); admin/RatesPage (M05); QuotePage (M06);
 │       │                          #   CreateOrderPage, OrdersPage (+"My assigned orders" for DELIVERY_AGENT, M09), OrderDetailPage
-│       │                          #   (M07; +tracking timeline & admin transition control, M08; +assigned-agent display & admin assign/auto-assign controls, M09)
-│       ├── services/              # api.ts (+apiPut, +apiDelete), health.ts, auth.ts (+updateProfile), agents.ts (M03), zones.ts (M04), rates.ts (M05), quote.ts (M06), orders.ts (M07), tracking.ts (M08), assignment.ts (M09)
+│       │                          #   (M07; +tracking timeline & admin transition control, M08; +assigned-agent display & admin assign/auto-assign controls, M09;
+│       │                          #   +"Reschedule delivery" control & reschedule-history section, M10)
+│       ├── services/              # api.ts (+apiPut, +apiDelete), health.ts, auth.ts (+updateProfile), agents.ts (M03), zones.ts (M04), rates.ts (M05), quote.ts (M06), orders.ts (M07), tracking.ts (M08), assignment.ts (M09), rescheduling.ts (M10)
 │       ├── hooks/                 # useHealthCheck, useAuth
 │       ├── contexts/              # AuthContext.tsx (provider) + auth-context.ts (context object)
-│       ├── types/                 # HealthResponse, auth.ts (+ProfileUpdateInput), agent.ts (M03), zone.ts (M04), rate.ts (M05), quote.ts (M06), order.ts (M07; +assigned_agent_id, M09), tracking.ts (M08), assignment.ts (M09)
+│       ├── types/                 # HealthResponse, auth.ts (+ProfileUpdateInput), agent.ts (M03), zone.ts (M04), rate.ts (M05), quote.ts (M06), order.ts (M07; +assigned_agent_id, M09), tracking.ts (M08), assignment.ts (M09), reschedule.ts (M10)
 │       ├── test/                  # setup.ts — React Testing Library cleanup
 │       └── utils/                 # currency.ts (formatCurrency, shared M06/M07)
 │
@@ -589,7 +667,8 @@ last-mile-delivery-tracker/
 │   ├── rate-calculation.md        # quote engine: weight formula, slab selection, COD, RBAC widening (M06)
 │   ├── order-management.md        # orders schema, ownership, pricing snapshot, CalculateQuote reuse (M07)
 │   ├── order-tracking.md          # state machine, per-edge authorization, concurrency proof, initial event (M08)
-│   └── assignment-engine.md       # eligibility rule, ranking algorithm, M08 reuse, concurrency proof, assigned_agent_id schema (M09)
+│   ├── assignment-engine.md       # eligibility rule, ranking algorithm, M08 reuse, concurrency proof, assigned_agent_id schema (M09)
+│   └── failed-delivery.md         # reschedule endpoints, the CUSTOMER-vs-M08-matrix resolution, reschedule_requests schema, agent-freeing, M09 reuse (M10)
 │
 └── scripts/
     └── seed/                      # reserved for later modules' larger seed data (M02's demo users seed from main.go instead — see its README)
@@ -674,3 +753,11 @@ Grows with each module.
 | Assignment concurrency (agent-then-order lock ordering + DB backstop) | `backend/internal/assignment/repository.go` (`lockCandidate`) | `TestAssignmentConcurrency_SameOrderRacedByTwoAdmins`, `TestAssignmentConcurrency_SameAgentRacedByTwoOrders` (repeated `-count=5`) | `docs/assignment-engine.md` |
 | `GET /orders`/`GET /orders/:id` scoped to DELIVERY_AGENT's own assigned orders | `backend/internal/orders/handler.go` | `TestListOrdersHandler_DeliveryAgentSeesOnlyAssignedOrders`, `TestOrderList_DeliveryAgentSeesOnlyAssignedOrders` | `docs/assignment-engine.md` |
 | Frontend "My assigned orders" view, admin manual/auto-assign controls | `frontend/src/pages/OrdersPage.tsx`, `OrderDetailPage.tsx` | `OrdersPage.test.tsx`, `OrderDetailPage.test.tsx`, `services/assignment.test.ts` | `docs/assignment-engine.md` |
+| `reschedule_requests` table: FKs, no approval/status columns | `backend/migrations/0011_create_reschedule_requests_table.sql` | integration schema/persistence tests in `rescheduling_integration_test.go` | `docs/failed-delivery.md` |
+| CUSTOMER-initiated reschedule resolved without modifying M08's ADMIN-only matrix | `backend/internal/rescheduling/handler.go`, `repository.go` | `TestRescheduleFlow_CustomerHappyPath`, `TestRescheduleFlow_AdminHappyPath` | `docs/failed-delivery.md` |
+| Reschedule reuses M08's `TransitionTx`, never reimplements the state machine | `backend/internal/rescheduling/repository.go` (`Reschedule`) | `TestRescheduleFlow_*` (integration) | `docs/failed-delivery.md` |
+| Reschedule ownership/RBAC (CUSTOMER own order, ADMIN any, DELIVERY_AGENT 403, 404 hides existence) | `backend/internal/rescheduling/handler.go` | `TestRescheduleHandler_*`, `TestRescheduleFlow_CustomerOwnershipEnforced`, `TestRescheduleFlow_DeliveryAgentForbidden` | `docs/failed-delivery.md` |
+| Previously assigned agent freed to AVAILABLE, atomically with the transition | `backend/internal/rescheduling/repository.go` (`freeAgent`) | `TestRescheduleFlow_CustomerHappyPath`, `TestRescheduleFlow_PreviouslyAssignedAgentNotIncorrectlyReused` | `docs/failed-delivery.md` |
+| Reschedule concurrency (same-order race, cross-module lock-ordering vs. M09) | `backend/internal/rescheduling/repository.go` | `TestRescheduleConcurrency_SameOrderRacedTwice`, `TestRescheduleConcurrency_DoesNotDeadlockWithAssignment` (repeated `-count=5`) | `docs/failed-delivery.md` |
+| Pure, deterministic date validation (past-date rejection, same-day allowed) | `backend/internal/rescheduling/reschedule.go` (`ValidateRescheduleDate`) | `TestValidateRescheduleDate_*`, `TestParseRequestedDate_*` | `docs/failed-delivery.md` |
+| Frontend reschedule control (native date input) + reschedule history | `frontend/src/pages/OrderDetailPage.tsx` | `OrderDetailPage.test.tsx`, `services/rescheduling.test.ts` | `docs/failed-delivery.md` |

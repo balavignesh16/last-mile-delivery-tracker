@@ -581,6 +581,73 @@ Response: the same updated-order shape as `POST .../assign`.
 
 ---
 
+## Failed delivery & rescheduling (M10)
+
+Customer- (and admin-) initiated rescheduling of a failed delivery. Owns
+exactly one new table (`reschedule_requests`) and reuses M08's own
+`FAILED → RESCHEDULED` edge and M09's own reassignment endpoints
+unmodified. See `docs/failed-delivery.md` for the full design (the
+architectural mismatch between "customer can reschedule" and M08's
+ADMIN-only transition matrix, and how it's resolved without touching
+M08; agent-availability behavior after a failure; why no
+`delivery_attempts` table exists).
+
+### `POST /api/v1/orders/:id/reschedule`
+
+**Auth**: required, **CUSTOMER (own order only) or ADMIN (any order)** (`DELIVERY_AGENT` → `403`). **Purpose**: reschedule a `FAILED` order for a new delivery date. Body: `{"requested_date": "YYYY-MM-DD", "reason": "optional"}` — no other field; the order id comes from the URL, the actor from the JWT.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/orders/$ORDER_ID/reschedule \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"requested_date":"2099-01-01","reason":"Not available"}'
+```
+
+```json
+{
+  "id": "...", "customer_id": "...", "created_by": "...",
+  "order_type": "B2C", "payment_type": "COD",
+  "pickup_area_id": "...", "drop_area_id": "...",
+  "pickup_zone_id": "...", "drop_zone_id": "...", "zone_relationship": "INTRA",
+  "length_cm": 10, "breadth_cm": 10, "height_cm": 10, "actual_weight_kg": 3,
+  "volumetric_weight_kg": 0.2, "chargeable_weight_kg": 3,
+  "rate_card_id": "...", "base_rate": 55, "cod_surcharge": 18, "final_amount": 73,
+  "assigned_agent_id": "...",
+  "status": "RESCHEDULED", "created_at": "2026-08-21T09:21:32Z"
+}
+```
+
+The response is the updated order — the same shape every other order
+endpoint returns. `assigned_agent_id` is deliberately left unchanged
+(the previously assigned agent, now freed back to `AVAILABLE` — see
+`docs/failed-delivery.md`); it is overwritten only by a later, separate
+`POST /orders/:id/assign`/`auto-assign` call. The reschedule record
+itself and the paired tracking event are available, unchanged, via `GET
+/orders/:id/reschedules` and `GET /orders/:id/tracking`.
+
+**Errors**: `401`, `403` (`DELIVERY_AGENT`), `404` (unknown order, or a `CUSTOMER` requesting an order they don't own), `409` (the order is not currently `FAILED`), `422` (malformed body, missing/invalid `requested_date`, or an unknown field).
+
+### `GET /api/v1/orders/:id/reschedules`
+
+**Auth**: required, **CUSTOMER (own order only) or ADMIN (any order)** (`DELIVERY_AGENT` → `403`). **Purpose**: the full, chronological (oldest first) reschedule-request history for one order.
+
+```bash
+curl http://localhost:8080/api/v1/orders/$ORDER_ID/reschedules -H "Authorization: Bearer $TOKEN"
+```
+
+```json
+[
+  {
+    "id": "...", "order_id": "...", "requested_by": "...",
+    "requested_date": "2099-01-01", "reason": "Not available",
+    "created_at": "2026-08-21T09:21:32Z"
+  }
+]
+```
+
+**Errors**: `401`, `403` (`DELIVERY_AGENT`), `404` (unknown id, or a `CUSTOMER` requesting an order they don't own — same hide-existence convention as `GET /orders/{id}`).
+
+---
+
 ## What's not here yet
 
-Reschedule-date capture, notifications, and dashboards — M10 through M12. This file grows with each module.
+Notifications and dashboards — M11 and M12. This file grows with each module.

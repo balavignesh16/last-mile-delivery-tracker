@@ -10,8 +10,10 @@ order status state machine (M08) — every status change this module
 causes goes through M08's own `tracking.Repository.TransitionTx`,
 unmodified. See "M08 reuse" below.
 
-Explicitly out of scope: reschedule-date capture (M10), notifications
-(M11), dashboards/analytics, geographic-distance ranking (no coordinate
+Explicitly out of scope: reschedule-request handling (M10 — now
+implemented, see `docs/failed-delivery.md`, reuses this module's own
+`Assign`/`AutoAssign` for `RESCHEDULED→ASSIGNED` unmodified rather than
+duplicating them), notifications (M11), dashboards/analytics, geographic-distance ranking (no coordinate
 data exists anywhere in the schema for orders/zones/areas — only
 `delivery_agents.current_lat`/`current_lng`, which nothing resolves a
 pickup point against), an assignment-history table, status-preserving
@@ -249,7 +251,8 @@ touch M08's own authorization. See `docs/order-tracking.md`.
   picker reuses M03's existing `GET /agents` listing directly.
 - No changes to M08's state machine, transition validation, or
   authorization matrix.
-- No reschedule-date capture (M10), notifications (M11), or dashboards.
+- No reschedule-request handling (M10, see `docs/failed-delivery.md`),
+  notifications (M11), or dashboards.
 
 ## Frontend
 

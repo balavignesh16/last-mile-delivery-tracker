@@ -52,6 +52,12 @@ Written so far:
   concurrency races and their PostgreSQL-level protection, the
   `orders.assigned_agent_id` schema addition, and the widened
   `DELIVERY_AGENT` order-visibility rules (M09).
+- [`failed-delivery.md`](./failed-delivery.md) — the M10 reschedule
+  endpoints, the architectural mismatch between "customer can
+  reschedule" and M08's ADMIN-only transition matrix and how it's
+  resolved without modifying M08, the `reschedule_requests` schema,
+  agent-availability behavior after a failure, why reassignment stays a
+  separate M09 call, and why no `delivery_attempts` table exists (M10).
 
 The rest don't exist yet — the root [README.md](../README.md) carries each
 completed module's summary directly, and links into this directory as

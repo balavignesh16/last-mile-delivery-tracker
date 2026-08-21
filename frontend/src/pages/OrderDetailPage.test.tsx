@@ -84,13 +84,15 @@ function renderAt(path: string) {
   )
 }
 
-function fetchRouter(orderStatus = 404, orderBody: unknown = { error: 'order not found' }, eventsBody: unknown = events, orderOverride: unknown = order) {
+function fetchRouter(orderStatus = 404, orderBody: unknown = { error: 'order not found' }, eventsBody: unknown = events, orderOverride: unknown = order, reschedulesBody: unknown = []) {
   return vi.fn((input: RequestInfo | URL) => {
     const url = String(input)
     if (url === '/api/v1/orders/order-1') return Promise.resolve(jsonResponse(200, orderOverride))
     if (url === '/api/v1/orders/order-1/tracking') return Promise.resolve(jsonResponse(200, eventsBody))
+    if (url === '/api/v1/orders/order-1/reschedules') return Promise.resolve(jsonResponse(200, reschedulesBody))
     if (url === '/api/v1/orders/not-mine') return Promise.resolve(jsonResponse(orderStatus, orderBody))
     if (url === '/api/v1/orders/not-mine/tracking') return Promise.resolve(jsonResponse(orderStatus, orderBody))
+    if (url === '/api/v1/orders/not-mine/reschedules') return Promise.resolve(jsonResponse(orderStatus, orderBody))
     if (url === '/api/v1/agents') return Promise.resolve(jsonResponse(200, agentsList))
     return Promise.reject(new Error(`unexpected fetch: ${url}`))
   })
@@ -383,5 +385,153 @@ describe('OrderDetailPage', () => {
     expect(screen.queryByText('Update status')).toBeNull()
     expect(screen.queryByText('Tracking timeline')).toBeNull()
     expect(fetchMock.mock.calls.some(([url]) => String(url) === '/api/v1/orders/order-1/tracking')).toBe(false)
+  })
+
+  // --- M10: rescheduling ---
+
+  it('shows the reschedule form to a CUSTOMER when the order is FAILED', async () => {
+    mockAuth('CUSTOMER')
+    const failedOrder = { ...order, status: 'FAILED' }
+    vi.stubGlobal('fetch', fetchRouter(404, { error: 'order not found' }, events, failedOrder))
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByText('Reschedule delivery')).toBeTruthy())
+    expect(screen.getByLabelText('New delivery date')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Reschedule' })).toBeTruthy()
+  })
+
+  it('shows the reschedule form to an ADMIN when the order is FAILED', async () => {
+    mockAuth('ADMIN')
+    const failedOrder = { ...order, status: 'FAILED' }
+    vi.stubGlobal('fetch', fetchRouter(404, { error: 'order not found' }, events, failedOrder))
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByText('Reschedule delivery')).toBeTruthy())
+  })
+
+  it('does not show the reschedule form when the order is not FAILED', async () => {
+    mockAuth('CUSTOMER')
+    vi.stubGlobal('fetch', fetchRouter())
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByText('₹75.00')).toBeTruthy())
+    expect(screen.queryByText('Reschedule delivery')).toBeNull()
+  })
+
+  it('does not show the reschedule form to a DELIVERY_AGENT', async () => {
+    mockAuth('DELIVERY_AGENT')
+    const failedOrder = { ...order, status: 'FAILED', assigned_agent_id: 'agent-1' }
+    vi.stubGlobal('fetch', fetchRouter(404, { error: 'order not found' }, events, failedOrder))
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByText('₹75.00')).toBeTruthy())
+    expect(screen.queryByText('Reschedule delivery')).toBeNull()
+  })
+
+  it('customer reschedule submission posts the right payload and refreshes order + history', async () => {
+    mockAuth('CUSTOMER')
+    const failedOrder = { ...order, status: 'FAILED' }
+    const rescheduledOrder = { ...order, status: 'RESCHEDULED' }
+    const rescheduleRecord = {
+      id: 'reschedule-1', order_id: 'order-1', requested_by: 'customer-1',
+      requested_date: '2099-01-01', reason: 'Not home', created_at: '2026-08-21T12:00:00Z',
+    }
+    let rescheduled = false
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/v1/orders/order-1/reschedule' && init?.method === 'POST') {
+        rescheduled = true
+        return Promise.resolve(jsonResponse(200, rescheduledOrder))
+      }
+      if (url === '/api/v1/orders/order-1') return Promise.resolve(jsonResponse(200, rescheduled ? rescheduledOrder : failedOrder))
+      if (url === '/api/v1/orders/order-1/tracking') return Promise.resolve(jsonResponse(200, events))
+      if (url === '/api/v1/orders/order-1/reschedules') return Promise.resolve(jsonResponse(200, rescheduled ? [rescheduleRecord] : []))
+      return Promise.reject(new Error(`unexpected fetch: ${url}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByLabelText('New delivery date')).toBeTruthy())
+    fireEvent.change(screen.getByLabelText('New delivery date'), { target: { value: '2099-01-01' } })
+    fireEvent.change(screen.getByLabelText('Reason (optional)'), { target: { value: 'Not home' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Reschedule' }))
+
+    await waitFor(() => expect(screen.getByText('Reschedule request submitted.')).toBeTruthy())
+
+    const rescheduleCall = fetchMock.mock.calls.find(([url]) => String(url) === '/api/v1/orders/order-1/reschedule')
+    expect(rescheduleCall).toBeTruthy()
+    const [, init] = rescheduleCall as [string, RequestInit]
+    expect(JSON.parse(init.body as string)).toEqual({ requested_date: '2099-01-01', reason: 'Not home' })
+
+    await waitFor(() => expect(screen.getByText('New date: 2099-01-01')).toBeTruthy())
+  })
+
+  it('shows an error banner when a reschedule is rejected', async () => {
+    mockAuth('CUSTOMER')
+    const failedOrder = { ...order, status: 'FAILED' }
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/v1/orders/order-1/reschedule' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse(409, { error: 'order is not currently FAILED' }))
+      }
+      if (url === '/api/v1/orders/order-1') return Promise.resolve(jsonResponse(200, failedOrder))
+      if (url === '/api/v1/orders/order-1/tracking') return Promise.resolve(jsonResponse(200, events))
+      if (url === '/api/v1/orders/order-1/reschedules') return Promise.resolve(jsonResponse(200, []))
+      return Promise.reject(new Error(`unexpected fetch: ${url}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByLabelText('New delivery date')).toBeTruthy())
+    fireEvent.change(screen.getByLabelText('New delivery date'), { target: { value: '2099-01-01' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Reschedule' }))
+
+    await waitFor(() => expect(screen.getByText('order is not currently FAILED')).toBeTruthy())
+  })
+
+  it('shows the empty reschedule-history state when there are no reschedules', async () => {
+    mockAuth('ADMIN')
+    vi.stubGlobal('fetch', fetchRouter())
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByText('No reschedule requests yet.')).toBeTruthy())
+  })
+
+  it('renders reschedule history entries', async () => {
+    mockAuth('ADMIN')
+    const rescheduleRecord = {
+      id: 'reschedule-1', order_id: 'order-1', requested_by: 'customer-1',
+      requested_date: '2099-01-01', reason: 'Not home', created_at: '2026-08-21T12:00:00Z',
+    }
+    vi.stubGlobal('fetch', fetchRouter(404, { error: 'order not found' }, events, order, [rescheduleRecord]))
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByText('New date: 2099-01-01')).toBeTruthy())
+    expect(screen.getByText('Reason: Not home')).toBeTruthy()
+    expect(screen.getByText(/Requested by: customer-1/)).toBeTruthy()
+  })
+
+  it('shows a reschedule-history error banner on failure', async () => {
+    mockAuth('ADMIN')
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/v1/orders/order-1') return Promise.resolve(jsonResponse(200, order))
+      if (url === '/api/v1/orders/order-1/tracking') return Promise.resolve(jsonResponse(200, events))
+      if (url === '/api/v1/orders/order-1/reschedules') return Promise.resolve(jsonResponse(500, { error: 'could not load reschedule history' }))
+      return Promise.reject(new Error(`unexpected fetch: ${url}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByText('could not load reschedule history')).toBeTruthy())
   })
 })
