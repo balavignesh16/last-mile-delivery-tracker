@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"lastmiletracker/internal/agents"
 	"lastmiletracker/internal/auth"
 	"lastmiletracker/internal/rates"
 	"lastmiletracker/internal/server"
@@ -20,7 +21,11 @@ import (
 
 const timeLayout = time.RFC3339
 
-type orderResponse struct {
+// OrderResponse is exported (M09) so internal/assignment can render the
+// exact same order shape after a successful assign/auto-assign without
+// a second, drifting copy of this mapping — the same reuse precedent
+// internal/rates set for ValidateQuoteFields/MapQuoteError (M06).
+type OrderResponse struct {
 	ID         string `json:"id"`
 	CustomerID string `json:"customer_id"`
 	CreatedBy  string `json:"created_by"`
@@ -47,12 +52,15 @@ type orderResponse struct {
 	CODSurcharge float64 `json:"cod_surcharge"`
 	FinalAmount  float64 `json:"final_amount"`
 
+	// AssignedAgentID is nil until M09 assigns an agent to this order.
+	AssignedAgentID *string `json:"assigned_agent_id"`
+
 	Status    string `json:"status"`
 	CreatedAt string `json:"created_at"`
 }
 
-func toOrderResponse(o Order) orderResponse {
-	return orderResponse{
+func ToOrderResponse(o Order) OrderResponse {
+	return OrderResponse{
 		ID:         o.ID,
 		CustomerID: o.CustomerID,
 		CreatedBy:  o.CreatedBy,
@@ -78,6 +86,8 @@ func toOrderResponse(o Order) orderResponse {
 		BaseRate:     o.BaseRate,
 		CODSurcharge: o.CODSurcharge,
 		FinalAmount:  o.FinalAmount,
+
+		AssignedAgentID: o.AssignedAgentID,
 
 		Status:    o.Status,
 		CreatedAt: o.CreatedAt.Format(timeLayout),
@@ -222,16 +232,20 @@ func CreateOrderHandler(ordersRepo Repository, usersRepo users.Repository, zones
 			return
 		}
 
-		server.WriteJSON(w, http.StatusCreated, toOrderResponse(created))
+		server.WriteJSON(w, http.StatusCreated, ToOrderResponse(created))
 	}
 }
 
-// ListOrdersHandler handles GET /api/v1/orders (ADMIN + CUSTOMER).
-// ADMIN sees every order; CUSTOMER sees only their own — the
-// distinction is made here, not left to the client to request, so
-// there is no query parameter a CUSTOMER could use to see another
-// customer's orders.
-func ListOrdersHandler(repo Repository) http.HandlerFunc {
+// ListOrdersHandler handles GET /api/v1/orders (ADMIN + CUSTOMER +
+// DELIVERY_AGENT, since M09). Each role sees a different slice, decided
+// here — never by a client-supplied filter: ADMIN sees every order,
+// CUSTOMER only their own, DELIVERY_AGENT only orders currently
+// assigned to them. agentsRepo resolves the caller's own
+// delivery_agents.id from their JWT's user id (the same problem, same
+// solution, as agents.GetMyAgentHandler already solved in M03) — a
+// DELIVERY_AGENT's JWT carries a user id, but assigned_agent_id is
+// keyed by the agent's own id, not their user id.
+func ListOrdersHandler(repo Repository, agentsRepo agents.Repository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		identity, ok := auth.IdentityFromContext(r.Context())
 		if !ok {
@@ -241,9 +255,26 @@ func ListOrdersHandler(repo Repository) http.HandlerFunc {
 
 		var list []Order
 		var err error
-		if identity.Role == users.RoleAdmin {
+		switch identity.Role {
+		case users.RoleAdmin:
 			list, err = repo.ListAllOrders(r.Context())
-		} else {
+		case users.RoleDeliveryAgent:
+			agent, aerr := agentsRepo.FindByUserID(r.Context(), identity.UserID)
+			if aerr != nil {
+				if errors.Is(aerr, agents.ErrNotFound) {
+					// No agent record for this user — cannot happen for a
+					// properly provisioned DELIVERY_AGENT (M03 creates both
+					// rows atomically), but fails safe with an empty list
+					// rather than a server error if it ever did.
+					server.WriteJSON(w, http.StatusOK, []OrderResponse{})
+					return
+				}
+				slog.Error("agent lookup failed", "error", aerr)
+				server.WriteError(w, http.StatusInternalServerError, "could not list orders")
+				return
+			}
+			list, err = repo.ListOrdersForAgent(r.Context(), agent.ID)
+		default: // users.RoleCustomer
 			list, err = repo.ListOrdersForCustomer(r.Context(), identity.UserID)
 		}
 		if err != nil {
@@ -252,21 +283,23 @@ func ListOrdersHandler(repo Repository) http.HandlerFunc {
 			return
 		}
 
-		responses := make([]orderResponse, len(list))
+		responses := make([]OrderResponse, len(list))
 		for i, o := range list {
-			responses[i] = toOrderResponse(o)
+			responses[i] = ToOrderResponse(o)
 		}
 		server.WriteJSON(w, http.StatusOK, responses)
 	}
 }
 
-// GetOrderHandler handles GET /api/v1/orders/{id} (ADMIN + CUSTOMER).
-// ADMIN may retrieve any order; CUSTOMER only their own — a CUSTOMER
-// requesting another customer's order id gets 404, never 403, so this
+// GetOrderHandler handles GET /api/v1/orders/{id} (ADMIN + CUSTOMER +
+// DELIVERY_AGENT, since M09). ADMIN may retrieve any order; CUSTOMER
+// only their own; DELIVERY_AGENT only an order currently assigned to
+// them. Any ownership mismatch returns 404, never 403, so this
 // endpoint never confirms that an order exists under an id the caller
-// doesn't own. Same ownership/IDOR pattern as M04's area-vs-zone and
-// M05's slab-vs-rate-card path checks.
-func GetOrderHandler(repo Repository) http.HandlerFunc {
+// doesn't own — the same convention M04's area-vs-zone and M05's
+// slab-vs-rate-card path checks established, now applied to a second
+// role.
+func GetOrderHandler(repo Repository, agentsRepo agents.Repository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		identity, ok := auth.IdentityFromContext(r.Context())
 		if !ok {
@@ -286,11 +319,20 @@ func GetOrderHandler(repo Repository) http.HandlerFunc {
 			return
 		}
 
-		if identity.Role == users.RoleCustomer && order.CustomerID != identity.UserID {
-			server.WriteError(w, http.StatusNotFound, "order not found")
-			return
+		switch identity.Role {
+		case users.RoleCustomer:
+			if order.CustomerID != identity.UserID {
+				server.WriteError(w, http.StatusNotFound, "order not found")
+				return
+			}
+		case users.RoleDeliveryAgent:
+			agent, aerr := agentsRepo.FindByUserID(r.Context(), identity.UserID)
+			if aerr != nil || order.AssignedAgentID == nil || *order.AssignedAgentID != agent.ID {
+				server.WriteError(w, http.StatusNotFound, "order not found")
+				return
+			}
 		}
 
-		server.WriteJSON(w, http.StatusOK, toOrderResponse(order))
+		server.WriteJSON(w, http.StatusOK, ToOrderResponse(order))
 	}
 }

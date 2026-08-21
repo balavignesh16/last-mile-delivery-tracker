@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"lastmiletracker/internal/agents"
 	"lastmiletracker/internal/auth"
 	"lastmiletracker/internal/rates"
 	"lastmiletracker/internal/users"
@@ -69,10 +70,12 @@ type fixture struct {
 	zonesRepo  *fakeZonesRepo
 	ratesRepo  *fakeRatesRepo
 	ordersRepo *fakeOrdersRepo
+	agentsRepo *fakeAgentsRepo
 
 	customer    users.User
 	admin       users.User
 	agent       users.User
+	agentRecord agents.AgentWithUser
 	areaID      string
 	otherAreaID string
 }
@@ -82,10 +85,12 @@ func newFixture() *fixture {
 	zRepo := newFakeZonesRepo()
 	rRepo := newFakeRatesRepo()
 	oRepo := newFakeOrdersRepo()
+	aRepo := newFakeAgentsRepo()
 
 	customer := uRepo.seed("customer-1", users.RoleCustomer)
 	admin := uRepo.seed("admin-1", users.RoleAdmin)
 	agent := uRepo.seed("agent-1", users.RoleDeliveryAgent)
+	agentRecord := aRepo.seed("agent-record-1", agent.ID)
 
 	zone, _ := zRepo.CreateZone(context.Background(), zones.CreateZoneInput{Name: "Zone"})
 	area, _ := zRepo.CreateArea(context.Background(), zone.ID, zones.CreateAreaInput{Name: "Area"})
@@ -97,14 +102,22 @@ func newFixture() *fixture {
 	})
 
 	return &fixture{
-		usersRepo: uRepo, zonesRepo: zRepo, ratesRepo: rRepo, ordersRepo: oRepo,
-		customer: customer, admin: admin, agent: agent,
+		usersRepo: uRepo, zonesRepo: zRepo, ratesRepo: rRepo, ordersRepo: oRepo, agentsRepo: aRepo,
+		customer: customer, admin: admin, agent: agent, agentRecord: agentRecord,
 		areaID: area.ID, otherAreaID: otherArea.ID,
 	}
 }
 
 func (f *fixture) createHandler() http.HandlerFunc {
 	return CreateOrderHandler(f.ordersRepo, f.usersRepo, f.zonesRepo, f.ratesRepo)
+}
+
+func (f *fixture) listHandler() http.HandlerFunc {
+	return ListOrdersHandler(f.ordersRepo, f.agentsRepo)
+}
+
+func (f *fixture) getHandler() http.HandlerFunc {
+	return GetOrderHandler(f.ordersRepo, f.agentsRepo)
 }
 
 func validCustomerBody(pickup, drop string) string {
@@ -363,13 +376,110 @@ func TestListOrdersHandler_CustomerSeesOnlyOwnOrders(t *testing.T) {
 	mustCreate(f.customer.ID)
 	mustCreate(otherCustomer.ID)
 
-	rec := doRequest(t, withAuth(t, f.customer.ID, users.RoleCustomer, ListOrdersHandler(f.ordersRepo)), http.MethodGet, "/api/v1/orders", "", nil)
+	rec := doRequest(t, withAuth(t, f.customer.ID, users.RoleCustomer, f.listHandler()), http.MethodGet, "/api/v1/orders", "", nil)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
 	list := decodeJSON[[]map[string]any](t, rec)
 	if len(list) != 1 || list[0]["customer_id"] != f.customer.ID {
 		t.Errorf("customer's order list = %v, want exactly their own order", list)
+	}
+}
+
+// --- List / Get: DELIVERY_AGENT scoping (M09) ---
+
+func TestListOrdersHandler_DeliveryAgentSeesOnlyAssignedOrders(t *testing.T) {
+	f := newFixture()
+	otherAgent := f.usersRepo.seed("agent-2", users.RoleDeliveryAgent)
+	otherAgentRecord := f.agentsRepo.seed("agent-record-2", otherAgent.ID)
+
+	mustCreate := func() Order {
+		quote, err := rates.CalculateQuote(context.Background(), f.zonesRepo, f.ratesRepo, rates.QuoteInput{
+			PickupAreaID: f.areaID, DropAreaID: f.areaID, OrderType: rates.OrderTypeB2C, PaymentType: rates.PaymentTypePrepaid,
+			LengthCM: 1, BreadthCM: 1, HeightCM: 1, ActualWeightKG: 1,
+		})
+		if err != nil {
+			t.Fatalf("CalculateQuote() error: %v", err)
+		}
+		order, err := f.ordersRepo.CreateOrder(context.Background(), CreateOrderInput{CustomerID: f.customer.ID, CreatedBy: f.customer.ID, Quote: quote})
+		if err != nil {
+			t.Fatalf("CreateOrder() error: %v", err)
+		}
+		return order
+	}
+
+	assignedToMe := mustCreate()
+	assignedToOther := mustCreate()
+	unassigned := mustCreate()
+	_ = unassigned
+	f.ordersRepo.assign(assignedToMe.ID, f.agentRecord.ID)
+	f.ordersRepo.assign(assignedToOther.ID, otherAgentRecord.ID)
+
+	rec := doRequest(t, withAuth(t, f.agent.ID, users.RoleDeliveryAgent, f.listHandler()), http.MethodGet, "/api/v1/orders", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	list := decodeJSON[[]map[string]any](t, rec)
+	if len(list) != 1 || list[0]["id"] != assignedToMe.ID {
+		t.Errorf("agent's order list = %v, want exactly the order assigned to them", list)
+	}
+}
+
+func TestListOrdersHandler_DeliveryAgentWithNoAgentRecordGetsEmptyList(t *testing.T) {
+	f := newFixture()
+	orphanAgentUser := f.usersRepo.seed("agent-orphan", users.RoleDeliveryAgent)
+
+	rec := doRequest(t, withAuth(t, orphanAgentUser.ID, users.RoleDeliveryAgent, f.listHandler()), http.MethodGet, "/api/v1/orders", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+	list := decodeJSON[[]map[string]any](t, rec)
+	if len(list) != 0 {
+		t.Errorf("order list = %v, want empty (no agent record for this user)", list)
+	}
+}
+
+func TestGetOrderHandler_DeliveryAgentCanRetrieveAssignedOrder(t *testing.T) {
+	f := newFixture()
+	quote, err := rates.CalculateQuote(context.Background(), f.zonesRepo, f.ratesRepo, rates.QuoteInput{
+		PickupAreaID: f.areaID, DropAreaID: f.areaID, OrderType: rates.OrderTypeB2C, PaymentType: rates.PaymentTypePrepaid,
+		LengthCM: 1, BreadthCM: 1, HeightCM: 1, ActualWeightKG: 1,
+	})
+	if err != nil {
+		t.Fatalf("CalculateQuote() error: %v", err)
+	}
+	order, err := f.ordersRepo.CreateOrder(context.Background(), CreateOrderInput{CustomerID: f.customer.ID, CreatedBy: f.customer.ID, Quote: quote})
+	if err != nil {
+		t.Fatalf("CreateOrder() error: %v", err)
+	}
+	f.ordersRepo.assign(order.ID, f.agentRecord.ID)
+
+	rec := doRequest(t, withAuth(t, f.agent.ID, users.RoleDeliveryAgent, f.getHandler()),
+		http.MethodGet, "/api/v1/orders/"+order.ID, "", map[string]string{"id": order.ID})
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
+
+func TestGetOrderHandler_DeliveryAgentCannotRetrieveUnassignedOrder(t *testing.T) {
+	f := newFixture()
+	quote, err := rates.CalculateQuote(context.Background(), f.zonesRepo, f.ratesRepo, rates.QuoteInput{
+		PickupAreaID: f.areaID, DropAreaID: f.areaID, OrderType: rates.OrderTypeB2C, PaymentType: rates.PaymentTypePrepaid,
+		LengthCM: 1, BreadthCM: 1, HeightCM: 1, ActualWeightKG: 1,
+	})
+	if err != nil {
+		t.Fatalf("CalculateQuote() error: %v", err)
+	}
+	order, err := f.ordersRepo.CreateOrder(context.Background(), CreateOrderInput{CustomerID: f.customer.ID, CreatedBy: f.customer.ID, Quote: quote})
+	if err != nil {
+		t.Fatalf("CreateOrder() error: %v", err)
+	}
+	// order exists but is not assigned to this (or any) agent
+
+	rec := doRequest(t, withAuth(t, f.agent.ID, users.RoleDeliveryAgent, f.getHandler()),
+		http.MethodGet, "/api/v1/orders/"+order.ID, "", map[string]string{"id": order.ID})
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d (must not reveal the order exists)", rec.Code, http.StatusNotFound)
 	}
 }
 
@@ -389,7 +499,7 @@ func TestGetOrderHandler_CustomerCannotRetrieveAnotherCustomersOrder(t *testing.
 		t.Fatalf("CreateOrder() error: %v", err)
 	}
 
-	rec := doRequest(t, withAuth(t, f.customer.ID, users.RoleCustomer, GetOrderHandler(f.ordersRepo)),
+	rec := doRequest(t, withAuth(t, f.customer.ID, users.RoleCustomer, f.getHandler()),
 		http.MethodGet, "/api/v1/orders/"+order.ID, "", map[string]string{"id": order.ID})
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d (must not reveal the order exists)", rec.Code, http.StatusNotFound)
@@ -410,7 +520,7 @@ func TestGetOrderHandler_AdminCanRetrieveAnyOrder(t *testing.T) {
 		t.Fatalf("CreateOrder() error: %v", err)
 	}
 
-	rec := doRequest(t, withAuth(t, f.admin.ID, users.RoleAdmin, GetOrderHandler(f.ordersRepo)),
+	rec := doRequest(t, withAuth(t, f.admin.ID, users.RoleAdmin, f.getHandler()),
 		http.MethodGet, "/api/v1/orders/"+order.ID, "", map[string]string{"id": order.ID})
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)

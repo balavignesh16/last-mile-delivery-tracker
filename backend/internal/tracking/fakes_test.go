@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"lastmiletracker/internal/users"
 )
 
@@ -33,7 +35,15 @@ func (f *fakeRepo) seedOrder(id, customerID string, status Status) {
 	f.orders[id] = &fakeOrder{customerID: customerID, status: status}
 }
 
-func (f *fakeRepo) Transition(_ context.Context, orderID, actorID string, role users.Role, newStatus Status, metadata json.RawMessage) (Event, error) {
+func (f *fakeRepo) Transition(ctx context.Context, orderID, actorID string, role users.Role, newStatus Status, metadata json.RawMessage) (Event, error) {
+	return f.TransitionTx(ctx, nil, orderID, actorID, role, newStatus, metadata)
+}
+
+// TransitionTx ignores tx entirely — this fake has no real transaction
+// to participate in, and its single-goroutine, in-memory map access
+// needs no locking of its own (concurrency behavior is proven against
+// real Postgres in tests/integration, not with this fake).
+func (f *fakeRepo) TransitionTx(_ context.Context, _ pgx.Tx, orderID, actorID string, role users.Role, newStatus Status, metadata json.RawMessage) (Event, error) {
 	o, ok := f.orders[orderID]
 	if !ok {
 		return Event{}, ErrOrderNotFound

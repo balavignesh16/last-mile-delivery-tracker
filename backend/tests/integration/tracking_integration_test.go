@@ -14,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"lastmiletracker/internal/agents"
 	"lastmiletracker/internal/auth"
 	"lastmiletracker/internal/database"
 	"lastmiletracker/internal/orders"
@@ -51,11 +52,12 @@ func setupTrackingTest(t *testing.T) (router http.Handler, usersRepo users.Repos
 	rRepo := rates.NewPostgresRepository(p)
 	oRepo := orders.NewPostgresRepository(p)
 	tRepo := tracking.NewPostgresRepository(p)
+	aRepo := agents.NewPostgresRepository(p)
 	r := server.NewRouter(p, testLogger(),
 		auth.Mount(uRepo, agentsIntegrationJWTSecret),
 		zones.Mount(zRepo, agentsIntegrationJWTSecret),
 		rates.Mount(rRepo, zRepo, agentsIntegrationJWTSecret),
-		orders.Mount(oRepo, uRepo, zRepo, rRepo, agentsIntegrationJWTSecret),
+		orders.Mount(oRepo, uRepo, zRepo, rRepo, aRepo, agentsIntegrationJWTSecret),
 		tracking.Mount(tRepo, agentsIntegrationJWTSecret),
 	)
 	return r, uRepo, zRepo, p

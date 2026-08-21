@@ -6,8 +6,9 @@ M08 owns the order status state machine and its immutable event log —
 `POST /api/v1/orders/:id/status` (perform one transition) and `GET
 /api/v1/orders/:id/tracking` (retrieve the full history). It does not
 own pricing (M06), order persistence/ownership (M07), agent assignment
-(M09 — not yet built), or reschedule-date capture (M10 — not yet
-built). See "What this module deliberately does not do" below.
+(M09 — now implemented, see `docs/assignment-engine.md`, without
+modifying anything in this module), or reschedule-date capture (M10 —
+not yet built). See "What this module deliberately does not do" below.
 
 ## State machine
 
@@ -59,17 +60,17 @@ route itself (`routes.go`) only admits `ADMIN`/`DELIVERY_AGENT` to
 `POST /orders/:id/status`, so a `CUSTOMER` gets `403` before the
 handler, let alone the per-edge table, is ever consulted.
 
-**Known, documented, temporary gap**: no `assigned_agent_id` column
-exists yet — that relationship is explicitly M09's own responsibility
-(`POST /orders/:id/assign`, per the blueprint's own endpoint list). So
-in this module, *any* authenticated `DELIVERY_AGENT` may perform an
-agent-tier edge on *any* order, not only "their" order — there is no
-ownership relationship to scope it further. This is a deliberate,
-finalized M08 decision, not an oversight: building `assigned_agent_id`
-or any assignment logic here would be scope creep into M09's own
-endpoints. Once M09 adds that relationship, tightening this to
-"only the assigned agent" is a follow-up change to
-`internal/tracking`, not a redesign.
+**Resolved by M09, deliberately not here**: M08 itself still performs
+*no* ownership check against `assigned_agent_id` — `Transition`'s
+authorization matrix above is unchanged, exactly as the finalized M09
+decisions required ("M08 remains the single source of truth for order
+lifecycle transitions... do not modify M08's authorization matrix").
+Any authenticated `DELIVERY_AGENT` can still perform an agent-tier edge
+on any order via `POST /orders/:id/status` directly. What M09 actually
+added is a *second*, narrower path into the same edges — an agent's
+own frontend only ever shows orders `GET /orders` already scopes to
+them (see `docs/assignment-engine.md`'s "DELIVERY_AGENT order
+visibility") — not a change to this endpoint's own authorization.
 
 ## Why the per-edge check lives inside `Transition`, not the handler
 
@@ -183,7 +184,11 @@ examples. In short:
 
 - No `assigned_agent_id` column, no assignment creation, no
   candidate-ranking/distance logic, no marking an agent `BUSY` — all
-  M09 (`POST /orders/:id/assign`, `POST /orders/:id/auto-assign`).
+  M09 (`POST /orders/:id/assign`, `POST /orders/:id/auto-assign`, see
+  `docs/assignment-engine.md`). M09 calls into this module's own
+  `TransitionTx` for the `CREATED→ASSIGNED`/`RESCHEDULED→ASSIGNED`
+  writes rather than duplicating them — M08 remains the only place
+  that validates a transition or writes `orders.status`.
 - No reschedule-date capture, no customer-initiated reschedule request
   flow — M10 (`POST /orders/:id/reschedule`,
   `GET /orders/:id/reschedules`). M08 only needs the
@@ -209,15 +214,23 @@ examples. In short:
   offers, the same disclaimer `ProtectedRoute` already carries for
   role-based routing).
 
-**Deliberately no agent-facing UI in M08.** `DELIVERY_AGENT` has API-level
-transition authority (per the matrix above) but no frontend entry
-point — `GET /orders` still excludes `DELIVERY_AGENT` entirely (a
-decision carried over from M07, deliberately not widened here). Giving
-every agent a list of every customer's order would be exactly the kind
-of overexposure M07's RBAC was designed to avoid, and the correct fix
-— "show an agent their *own* assigned orders" — needs M09's assignment
-relationship to scope correctly. Until then, agent-tier transitions
-happen at the API layer only.
+**Was deliberately no agent-facing UI in M08** — `GET /orders` excluded
+`DELIVERY_AGENT` entirely, since giving every agent a list of every
+customer's order would be exactly the kind of overexposure M07's RBAC
+was designed to avoid, and scoping it to "an agent's *own* orders"
+needed the assignment relationship M09 later added. **M09 now provides
+that entry point** (`OrdersPage`'s "My assigned orders" view,
+`OrderDetailPage`'s order-detail breakdown) — see
+`docs/assignment-engine.md`'s "Frontend" section. `GET
+/orders/:id/tracking` itself is **still** `ADMIN`/`CUSTOMER`-only,
+unchanged by M09 (this module's own route-level RBAC was never
+widened) — `OrderDetailPage` accounts for this by never calling that
+endpoint for a `DELIVERY_AGENT` viewer, rather than surfacing its `403`
+as an error. This module's own `LEGAL_TRANSITIONS`-driven status-update
+control also remains `ADMIN`-only in the frontend, unchanged; an agent
+still has API-level transition authority per the matrix above without a
+corresponding frontend control, which remains out of this module's
+scope to add.
 
 ## Testing
 

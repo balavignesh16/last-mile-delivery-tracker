@@ -10,28 +10,34 @@ with a React + TypeScript frontend, structured as a modular monolith.
 
 ## Current Status
 
-**M08 — Tracking & Order Lifecycle.** Orders now have a real status
-state machine: `POST /api/v1/orders/:id/status` validates and applies
-one legal transition (`CREATED → ASSIGNED → PICKED_UP → IN_TRANSIT →
-OUT_FOR_DELIVERY → {DELIVERED | FAILED → RESCHEDULED → ASSIGNED}`,
-`DELIVERED` terminal, every other pair — including same-status and the
-blueprint's own `CREATED → DELIVERED` counterexample — rejected `409`),
-and `GET /api/v1/orders/:id/tracking` returns the full, immutable,
-chronological event history. Authorization is per-edge, not per-route:
-`ADMIN` may perform any transition, `DELIVERY_AGENT` only the five
-agent-tier ones, `CUSTOMER` none. Concurrent conflicting transitions on
-the same order are serialized by a `SELECT ... FOR UPDATE` lock — proven
-under real concurrent load, not just asserted. Order creation itself
-(M07) now writes the order's opening `CREATED` tracking event
-atomically, inside the same transaction as the order row. The frontend
-adds a tracking timeline to the order detail page (both `CUSTOMER` and
-`ADMIN`) and an `ADMIN`-only status-transition control. **Agent
-assignment, reschedule-date capture, and notifications are explicitly
-out of scope here** — no `assigned_agent_id` column or assignment logic
-was added; `DELIVERY_AGENT` transition authority is deliberately
-unscoped in this module (documented, temporary) until M09 supplies that
-relationship. Those arrive in M09 through M12, in order, each expanding
-this README and `docs/` as they land.
+**M09 — Assignment Engine.** Orders can now be assigned a delivery
+agent, manually or automatically: `POST /api/v1/orders/:id/assign`
+(admin names an agent, `{"agent_id": "<uuid>"}`) and `POST
+/api/v1/orders/:id/auto-assign` (no body — the engine picks). Both are
+`ADMIN`-only and go through M08's own `TransitionTx` for the actual
+`→ASSIGNED` status write — M09 never reimplements the state machine or
+its per-edge authorization. Eligibility is one rule (`active`,
+`AVAILABLE`, a resolvable `current_zone_id`), reused identically by both
+paths. Auto-assignment ranks eligible candidates deterministically:
+same-zone before cross-zone, then `last_assigned_at` ascending
+(`NULL` — never assigned — first), then agent UUID as a final,
+unconditional tiebreak; **no geographic-distance ranking** — no
+coordinate data exists anywhere in the schema for orders or zones, only
+for an agent's own last-reported location, which nothing resolves a
+pickup point against. Four concurrency races (two admins racing the
+same order, manual racing auto-assign, two orders racing the same
+agent, assignment racing an unrelated M08 transition) are closed by
+consistent-order row locking plus a partial unique index backstop
+(`orders.assigned_agent_id`, one active assignment per agent) — proven
+against real concurrent Postgres load, repeated to rule out flakiness.
+No new table: assignment history lives in M08's own tracking-event
+metadata. `GET /orders` and `GET /orders/:id` widen to admit
+`DELIVERY_AGENT`, scoped strictly to their own assigned orders; the
+frontend gains a "My assigned orders" view and, for `ADMIN`, manual/
+auto-assign controls on the order detail page. **Reschedule-date
+capture and notifications are explicitly out of scope here** — those
+arrive in M10 and M11, each expanding this README and `docs/` as they
+land.
 
 | Module | Status |
 |---|---|
@@ -43,7 +49,7 @@ this README and `docs/` as they land.
 | M06 — Rate Calculation Engine | ✅ Done |
 | M07 — Order Management | ✅ Done |
 | M08 — Tracking & Order Lifecycle | ✅ Done |
-| M09 — Assignment Engine | Not started |
+| M09 — Assignment Engine | ✅ Done |
 | M10 — Failed Delivery & Rescheduling | Not started |
 | M11 — Notification Service | Not started |
 | M12 — Dashboards & Evaluation Layer | Not started |
@@ -438,14 +444,14 @@ is in [`docs/api.md`](docs/api.md). Short version:
   FAILED}`); CUSTOMER on none. A DELIVERY_AGENT attempting
   `CREATED→ASSIGNED` or `FAILED→RESCHEDULED` gets `403` even though the
   route itself admits their role.
-- **Known, documented, temporary gap**: no `assigned_agent_id` exists
-  yet (that's M09's own `POST /orders/:id/assign`) — so any
-  authenticated DELIVERY_AGENT may perform an agent-tier edge on *any*
-  order, not only one assigned to them. A finalized M08 decision, not
-  an oversight; M09 tightens this once the assignment relationship
-  exists.
+- **Resolved by M09, deliberately not here**: `orders.assigned_agent_id`
+  now exists, but this endpoint's own authorization was intentionally
+  left unmodified — any authenticated DELIVERY_AGENT can still perform
+  an agent-tier edge on any order via this endpoint directly. What M09
+  actually scoped is `GET /orders`/`GET /orders/:id` (an agent's own
+  frontend view), not this transition endpoint's authorization.
 - **`GET /api/v1/orders/:id/tracking`** (ADMIN any order; CUSTOMER own
-  only, `404` otherwise; DELIVERY_AGENT → 403) — the full,
+  only, `404` otherwise; DELIVERY_AGENT → 403, unchanged by M09) — the full,
   chronological event history. The first entry always has
   `previous_status: null` — order creation itself is the first
   tracking event, written atomically by `internal/orders.CreateOrder`.
@@ -458,11 +464,67 @@ is in [`docs/api.md`](docs/api.md). Short version:
 - **One new table, no `orders` schema change**: `order_tracking_events`
   (migration `0009`) — `orders.status`'s CHECK constraint already
   covered the full M08 value set since M07, so no `ALTER` was needed.
-  No `assigned_agent_id`, no `slab_id`. Genuinely append-only — no
-  update/delete route exists for this table at all.
-- **Out of scope, by design**: agent assignment/auto-assignment,
-  reschedule-date capture, notifications, status/zone/agent filtering,
-  any agent-facing order list/detail UI — all later modules.
+  No `slab_id`. Genuinely append-only — no update/delete route exists
+  for this table at all.
+- **Out of scope, by design**: agent assignment/auto-assignment (now
+  M09, below), reschedule-date capture, notifications, status/zone
+  filtering.
+
+## Assignment Engine (M09)
+
+Full design detail (the eligibility rule, the deterministic ranking
+algorithm and why no geographic-distance ranking exists, why M08's
+state machine is reused rather than duplicated, the four concurrency
+races and their protection) is in
+[`docs/assignment-engine.md`](docs/assignment-engine.md); endpoint
+reference is in [`docs/api.md`](docs/api.md). Short version:
+
+- **`POST /api/v1/orders/:id/assign`** (ADMIN only) — manually assign
+  one named agent (`{"agent_id": "<uuid>"}`). Locks the agent row,
+  re-checks eligibility under lock, transitions the order to `ASSIGNED`
+  via M08's own `TransitionTx` (never reimplemented), writes
+  `assigned_agent_id`, marks the agent `BUSY` — all in one transaction.
+- **`POST /api/v1/orders/:id/auto-assign`** (ADMIN only, no body) —
+  ranks every eligible agent (active, `AVAILABLE`, a usable
+  `current_zone_id`) by same-zone-first, then `last_assigned_at`
+  ascending (`NULL` first), then agent UUID as the final tiebreak;
+  locks the winner and re-checks eligibility, retrying the next-ranked
+  candidate if it was raced away since the bulk read. **No geographic-
+  distance ranking** — no coordinate data exists anywhere in the schema
+  for orders or zones to rank against.
+- **Eligibility is one rule, shared by both paths**: `active = true`,
+  `availability = AVAILABLE`, a resolvable `current_zone_id` — an admin
+  cannot deliberately assign a `BUSY`/`OFFLINE`/inactive agent any more
+  than auto-assignment could pick one.
+- **No status-preserving reassignment**: M08 has no `ASSIGNED→ASSIGNED`
+  edge, and this module doesn't add one — the only reassignment path is
+  the existing `FAILED→RESCHEDULED→ASSIGNED` cycle, which both endpoints
+  already support since it's just another `→ASSIGNED` transition.
+- **Concurrency, proven under real load**: two admins racing the same
+  order, manual racing auto-assign, two orders racing the same agent,
+  and assignment racing an unrelated M08 transition — all closed by
+  consistent agent-then-order lock ordering plus a partial unique index
+  backstop (`idx_orders_one_active_assignment_per_agent`: at most one
+  active — `ASSIGNED`/`PICKED_UP`/`IN_TRANSIT`/`OUT_FOR_DELIVERY` —
+  assignment per agent). Verified with real concurrent goroutines
+  against real Postgres, repeated (`-count=5`) to rule out flakiness.
+- **One new column, no new table**: `orders.assigned_agent_id`
+  (migration `0010`) plus two indexes. Assignment history lives entirely
+  in M08's own `order_tracking_events.metadata` — each `ASSIGNED` event
+  now carries `{"assigned_agent_id": "..."}`.
+- **`GET /orders`/`GET /orders/:id` widen to admit DELIVERY_AGENT**,
+  scoped strictly to their own assigned orders (never every customer's
+  order); `GET /orders/:id/tracking` stays ADMIN/CUSTOMER-only,
+  deliberately unchanged.
+- **Frontend**: `OrdersPage` shows "My assigned orders" for
+  DELIVERY_AGENT (no "New order" action); `OrderDetailPage` shows the
+  assigned agent and, for ADMIN on an assignable order, manual (agent
+  picker, reusing M03's `GET /agents`) and auto-assign controls with
+  success/error states.
+- **Out of scope, by design**: reschedule-date capture, notifications,
+  dashboards, geographic-distance infrastructure, an assignment-history
+  table, a candidate-preview endpoint, and any change to M08's own
+  state machine or authorization.
 
 ## Repository Structure
 
@@ -489,17 +551,18 @@ last-mile-delivery-tracker/
 │   │   ├── rates/                # rate_cards/rate_card_slabs domain, concurrency-safe repository, handlers, routes (M05); pricing.go/quote_handler.go add the M06 calculation engine + POST /orders/quote
 │   │   ├── orders/                # orders domain, repository, handlers, routes (M07) — calls rates.CalculateQuote, never reimplements pricing
 │   │   ├── tracking/              # status state machine, order_tracking_events domain, repository, handlers, routes (M08)
-│   │   ├── assignment/            # M09 — reserved, empty
+│   │   ├── assignment/            # candidate ranking, eligibility, repository (reuses tracking.TransitionTx), handlers, routes (M09)
 │   │   ├── rescheduling/          # M10 — reserved, empty
 │   │   └── notifications/         # M11 — reserved, empty
 │   ├── migrations/                # embedded SQL migrations (go:embed): 0001 users (M02), 0002 delivery_agents (M03),
 │   │                               #   0003 zones, 0004 areas, 0005 delivery_agents.current_zone_id FK (M04),
 │   │                               #   0006 rate_cards, 0007 rate_card_slabs (M05); M06 added none — pure calculation, no new schema;
-│   │                               #   0008 orders (M07); 0009 order_tracking_events (M08, no ALTER to orders)
+│   │                               #   0008 orders (M07); 0009 order_tracking_events (M08, no ALTER to orders);
+│   │                               #   0010 orders.assigned_agent_id + indexes (M09)
 │   └── tests/
 │       ├── unit/                  # convention note — unit tests are co-located with source
 │       ├── integration/           # DB-backed integration tests (build tag: integration)
-│       └── e2e/                   # reserved — full-stack flow tests start around M09
+│       └── e2e/                   # reserved — full-stack flow tests start around M12
 │
 ├── frontend/
 │   ├── package.json
@@ -508,11 +571,12 @@ last-mile-delivery-tracker/
 │       ├── components/            # Layout (role-aware nav), StatusBadge, ErrorBanner, ProtectedRoute (+roles), AreaPicker (M06, shared with M07)
 │       ├── pages/                 # Home, LoginPage, RegisterPage, Account (profile edit);
 │       │                          #   admin/AgentsPage, agent/OperationsPage (M03); admin/ZonesPage (M04); admin/RatesPage (M05); QuotePage (M06);
-│       │                          #   CreateOrderPage, OrdersPage, OrderDetailPage (M07; +tracking timeline & admin transition control, M08)
-│       ├── services/              # api.ts (+apiPut, +apiDelete), health.ts, auth.ts (+updateProfile), agents.ts (M03), zones.ts (M04), rates.ts (M05), quote.ts (M06), orders.ts (M07), tracking.ts (M08)
+│       │                          #   CreateOrderPage, OrdersPage (+"My assigned orders" for DELIVERY_AGENT, M09), OrderDetailPage
+│       │                          #   (M07; +tracking timeline & admin transition control, M08; +assigned-agent display & admin assign/auto-assign controls, M09)
+│       ├── services/              # api.ts (+apiPut, +apiDelete), health.ts, auth.ts (+updateProfile), agents.ts (M03), zones.ts (M04), rates.ts (M05), quote.ts (M06), orders.ts (M07), tracking.ts (M08), assignment.ts (M09)
 │       ├── hooks/                 # useHealthCheck, useAuth
 │       ├── contexts/              # AuthContext.tsx (provider) + auth-context.ts (context object)
-│       ├── types/                 # HealthResponse, auth.ts (+ProfileUpdateInput), agent.ts (M03), zone.ts (M04), rate.ts (M05), quote.ts (M06), order.ts (M07), tracking.ts (M08)
+│       ├── types/                 # HealthResponse, auth.ts (+ProfileUpdateInput), agent.ts (M03), zone.ts (M04), rate.ts (M05), quote.ts (M06), order.ts (M07; +assigned_agent_id, M09), tracking.ts (M08), assignment.ts (M09)
 │       ├── test/                  # setup.ts — React Testing Library cleanup
 │       └── utils/                 # currency.ts (formatCurrency, shared M06/M07)
 │
@@ -524,7 +588,8 @@ last-mile-delivery-tracker/
 │   ├── rate-configuration.md      # rate_cards/rate_card_slabs schema, boundaries, concurrency (M05)
 │   ├── rate-calculation.md        # quote engine: weight formula, slab selection, COD, RBAC widening (M06)
 │   ├── order-management.md        # orders schema, ownership, pricing snapshot, CalculateQuote reuse (M07)
-│   └── order-tracking.md          # state machine, per-edge authorization, concurrency proof, initial event (M08)
+│   ├── order-tracking.md          # state machine, per-edge authorization, concurrency proof, initial event (M08)
+│   └── assignment-engine.md       # eligibility rule, ranking algorithm, M08 reuse, concurrency proof, assigned_agent_id schema (M09)
 │
 └── scripts/
     └── seed/                      # reserved for later modules' larger seed data (M02's demo users seed from main.go instead — see its README)
@@ -592,3 +657,20 @@ Grows with each module.
 | One active rate card per (order_type, zone_relationship), race-safe | `backend/internal/rates/repository.go` (`UpdateRateCard`) | `TestConcurrentActivation_OnlyOneWins` (real concurrent requests vs. real Postgres) | `docs/rate-configuration.md` |
 | Concurrent slab writes serialized, race-safe | `backend/internal/rates/repository.go` (`lockRateCard`, `CreateSlab`/`UpdateSlab`) | `TestConcurrentSlabCreation_OverlapPreventedUnderRace` | `docs/rate-configuration.md` |
 | Frontend admin rate card/slab management, loading/empty/error states | `frontend/src/pages/admin/RatesPage.tsx` | `RatesPage.test.tsx`, `services/rates.test.ts` | `docs/rate-configuration.md` |
+| `POST /orders/quote`: volumetric/chargeable weight, `[min,max)` slab selection, COD surcharge | `backend/internal/rates/pricing.go` (`CalculateQuote`) | `TestQuote_*` (unit + `quote_integration_test.go` golden cases) | `docs/rate-calculation.md` |
+| `orders` table: FKs, CHECKs, default `status='CREATED'` | `backend/migrations/0008_create_orders_table.sql` | `TestOrdersTable_*` | `docs/order-management.md` |
+| Order creation reuses `CalculateQuote`, never re-implements pricing | `backend/internal/orders/handler.go` (`CreateOrderHandler`) | `TestOrderCreate_PricingSnapshotMatchesM06Calculation` | `docs/order-management.md` |
+| Customer-vs-admin order creation DTOs, no `customer_id` mass assignment | `backend/internal/orders/handler.go` | `TestCreateOrderHandler_CustomerIdentityComesFromJWTNotBody`, `TestOrderCreate_CustomerCannotSpecifyCustomerID` | `docs/order-management.md` |
+| Order list/get ownership (ADMIN all, CUSTOMER own only, 404 not 403) | `backend/internal/orders/handler.go` | `TestOrderGet_CustomerOwnershipIDOR`, `TestOrderList_CustomerIsolation` | `docs/order-management.md` |
+| Frontend order creation/list/detail, loading/empty/error states | `frontend/src/pages/CreateOrderPage.tsx`, `OrdersPage.tsx`, `OrderDetailPage.tsx` | `CreateOrderPage.test.tsx`, `OrdersPage.test.tsx`, `OrderDetailPage.test.tsx` | `docs/order-management.md` |
+| `order_tracking_events` table: append-only, no update/delete route | `backend/migrations/0009_create_order_tracking_events_table.sql` | `TestOrderTrackingEventsTable_*`, `TestTrackingEvents_NoUpdateOrDeleteRouteExists` | `docs/order-tracking.md` |
+| Closed 8-edge state machine, per-edge role authorization | `backend/internal/tracking/statemachine.go` | `TestIsValidTransition_*`, `TestIsRoleAuthorized_FullMatrix` | `docs/order-tracking.md` |
+| Concurrent conflicting transitions serialized, race-safe | `backend/internal/tracking/repository.go` (`Transition`/`TransitionTx`) | `TestConcurrentTransition_OnlyOneWins` | `docs/order-tracking.md` |
+| Order creation atomically writes its own opening tracking event | `backend/internal/orders/repository.go` (`CreateOrder`) | `TestOrderCreate_InitialTrackingEventRecorded` | `docs/order-tracking.md` |
+| Frontend tracking timeline + admin-only transition control | `frontend/src/pages/OrderDetailPage.tsx` | `OrderDetailPage.test.tsx` | `docs/order-tracking.md` |
+| `orders.assigned_agent_id` + partial unique index (one active assignment per agent) | `backend/migrations/0010_add_assigned_agent_id_to_orders.sql` | `TestOrdersTable_*`, `TestAssignmentConcurrency_SameAgentRacedByTwoOrders` | `docs/assignment-engine.md` |
+| Deterministic candidate ranking (same-zone, `last_assigned_at`, UUID tiebreak), pure/DB-free | `backend/internal/assignment/candidate.go` (`SelectCandidate`) | `TestSelectCandidate_*`, `TestSelectCandidate_Deterministic` | `docs/assignment-engine.md` |
+| Manual/auto-assignment reuse M08's `TransitionTx`, never reimplement the state machine | `backend/internal/assignment/repository.go` (`Assign`, `AutoAssign`) | `TestAssignmentFlow_*` (integration) | `docs/assignment-engine.md` |
+| Assignment concurrency (agent-then-order lock ordering + DB backstop) | `backend/internal/assignment/repository.go` (`lockCandidate`) | `TestAssignmentConcurrency_SameOrderRacedByTwoAdmins`, `TestAssignmentConcurrency_SameAgentRacedByTwoOrders` (repeated `-count=5`) | `docs/assignment-engine.md` |
+| `GET /orders`/`GET /orders/:id` scoped to DELIVERY_AGENT's own assigned orders | `backend/internal/orders/handler.go` | `TestListOrdersHandler_DeliveryAgentSeesOnlyAssignedOrders`, `TestOrderList_DeliveryAgentSeesOnlyAssignedOrders` | `docs/assignment-engine.md` |
+| Frontend "My assigned orders" view, admin manual/auto-assign controls | `frontend/src/pages/OrdersPage.tsx`, `OrderDetailPage.tsx` | `OrdersPage.test.tsx`, `OrderDetailPage.test.tsx`, `services/assignment.test.ts` | `docs/assignment-engine.md` |

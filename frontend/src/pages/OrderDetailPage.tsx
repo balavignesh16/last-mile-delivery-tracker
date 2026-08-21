@@ -4,12 +4,21 @@ import { ErrorBanner } from '../components/ErrorBanner'
 import { Layout } from '../components/Layout'
 import { StatusBadge } from '../components/StatusBadge'
 import { useAuth } from '../hooks/useAuth'
+import { assignOrder, autoAssignOrder } from '../services/assignment'
 import { ApiError } from '../services/api'
+import { listAgents } from '../services/agents'
 import { getOrder } from '../services/orders'
 import { getOrderTracking, transitionOrderStatus } from '../services/tracking'
+import type { Agent } from '../types/agent'
 import type { Order } from '../types/order'
 import { LEGAL_TRANSITIONS, type TrackingEvent } from '../types/tracking'
 import { formatCurrency } from '../utils/currency'
+
+// ASSIGNED is only reachable from these two statuses in M08's state
+// machine (CREATED->ASSIGNED, RESCHEDULED->ASSIGNED) — the assignment
+// controls only render in those states so an ADMIN is never shown a
+// button that would just 409.
+const ASSIGNABLE_STATUSES: Order['status'][] = ['CREATED', 'RESCHEDULED']
 
 function badgeState(status: string): 'ok' | 'error' | 'loading' {
   if (status === 'DELIVERED') return 'ok'
@@ -26,17 +35,28 @@ export function OrderDetailPage() {
   const { id } = useParams<{ id: string }>()
   const { token, user } = useAuth()
   const isAdmin = user?.role === 'ADMIN'
+  // GET /orders/:id/tracking is ADMIN/CUSTOMER only — unchanged by M09,
+  // deliberately not widened to DELIVERY_AGENT (see
+  // docs/order-tracking.md) — so this page must not even attempt the
+  // call for an agent viewer, let alone show its 403 as an error.
+  const canViewTracking = user?.role === 'ADMIN' || user?.role === 'CUSTOMER'
 
   const [order, setOrder] = useState<Order | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
   const [events, setEvents] = useState<TrackingEvent[]>([])
-  const [eventsLoading, setEventsLoading] = useState(true)
+  const [eventsLoading, setEventsLoading] = useState(canViewTracking)
   const [eventsError, setEventsError] = useState<string | null>(null)
 
   const [transitionError, setTransitionError] = useState<string | null>(null)
   const [transitioning, setTransitioning] = useState<string | null>(null)
+
+  const [agents, setAgents] = useState<Agent[]>([])
+  const [selectedAgentId, setSelectedAgentId] = useState('')
+  const [assignmentError, setAssignmentError] = useState<string | null>(null)
+  const [assignmentSuccess, setAssignmentSuccess] = useState<string | null>(null)
+  const [assigning, setAssigning] = useState(false)
 
   useEffect(() => {
     if (!token || !id) return
@@ -57,7 +77,7 @@ export function OrderDetailPage() {
   }, [token, id])
 
   useEffect(() => {
-    if (!token || !id) return
+    if (!token || !id || !canViewTracking) return
     let cancelled = false
     getOrderTracking(token, id)
       .then((list) => {
@@ -72,7 +92,67 @@ export function OrderDetailPage() {
     return () => {
       cancelled = true
     }
-  }, [token, id])
+  }, [token, id, canViewTracking])
+
+  // Reuses M03's own listAgents infrastructure (the same call
+  // AgentsPage makes) rather than a new candidate-preview endpoint —
+  // the finalized M09 decision explicitly rules one out. ADMIN-only:
+  // GET /agents is admin-only, so this never fires for other roles.
+  useEffect(() => {
+    if (!token || isAdmin !== true) return
+    let cancelled = false
+    listAgents(token)
+      .then((list) => {
+        if (!cancelled) setAgents(list)
+      })
+      .catch(() => {
+        // Non-fatal: the assignment section still renders (auto-assign
+        // needs no agent list), just without a manual picker.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [token, isAdmin])
+
+  async function refreshOrderAndTracking() {
+    if (!token || !id) return
+    const [updatedOrder, updatedEvents] = await Promise.all([getOrder(token, id), getOrderTracking(token, id)])
+    setOrder(updatedOrder)
+    setEvents(updatedEvents)
+  }
+
+  async function handleManualAssign() {
+    if (!token || !id || !selectedAgentId) return
+    setAssignmentError(null)
+    setAssignmentSuccess(null)
+    setAssigning(true)
+    try {
+      await assignOrder(token, id, { agent_id: selectedAgentId })
+      await refreshOrderAndTracking()
+      setAssignmentSuccess('Order assigned.')
+      setSelectedAgentId('')
+    } catch (err) {
+      setAssignmentError(err instanceof ApiError ? err.message : 'Could not assign this order.')
+    } finally {
+      setAssigning(false)
+    }
+  }
+
+  async function handleAutoAssign() {
+    if (!token || !id) return
+    setAssignmentError(null)
+    setAssignmentSuccess(null)
+    setAssigning(true)
+    try {
+      const updated = await autoAssignOrder(token, id)
+      await refreshOrderAndTracking()
+      setAssignmentSuccess(`Order auto-assigned to agent ${updated.assigned_agent_id}.`)
+    } catch (err) {
+      setAssignmentError(err instanceof ApiError ? err.message : 'Could not auto-assign this order.')
+    } finally {
+      setAssigning(false)
+    }
+  }
 
   async function handleTransition(status: string) {
     if (!token || !id) return
@@ -154,7 +234,61 @@ export function OrderDetailPage() {
                 <dt className="text-slate-500">Placed</dt>
                 <dd className="font-medium text-slate-900">{new Date(order.created_at).toLocaleString()}</dd>
               </div>
+              <div>
+                <dt className="text-slate-500">Assigned agent</dt>
+                <dd className="font-medium text-slate-900">
+                  {order.assigned_agent_id
+                    ? (agents.find((a) => a.id === order.assigned_agent_id)?.full_name ?? order.assigned_agent_id)
+                    : 'Unassigned'}
+                </dd>
+              </div>
             </dl>
+
+            {isAdmin && (ASSIGNABLE_STATUSES.includes(order.status) || assignmentSuccess || assignmentError) && (
+              <div className="mt-6 border-t border-slate-100 pt-6">
+                <h2 className="text-sm font-semibold text-slate-700">Assign delivery agent</h2>
+                <ErrorBanner message={assignmentError} />
+                {assignmentSuccess && (
+                  <div role="status" className="mt-2 rounded-md border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm text-emerald-800">
+                    {assignmentSuccess}
+                  </div>
+                )}
+                {ASSIGNABLE_STATUSES.includes(order.status) && (
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <select
+                      aria-label="Delivery agent"
+                      value={selectedAgentId}
+                      onChange={(e) => setSelectedAgentId(e.target.value)}
+                      disabled={assigning}
+                      className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    >
+                      <option value="">Select an agent…</option>
+                      {agents.map((a) => (
+                        <option key={a.id} value={a.id}>
+                          {a.full_name} ({a.availability})
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => void handleManualAssign()}
+                      disabled={assigning || !selectedAgentId}
+                      className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+                    >
+                      {assigning ? 'Assigning…' : 'Assign'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void handleAutoAssign()}
+                      disabled={assigning}
+                      className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                    >
+                      {assigning ? 'Assigning…' : 'Auto-assign'}
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
 
             {isAdmin && (
               <div className="mt-6 border-t border-slate-100 pt-6">
@@ -183,6 +317,7 @@ export function OrderDetailPage() {
         )}
       </div>
 
+      {canViewTracking && (
       <div className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
         <h2 className="text-sm font-semibold text-slate-700">Tracking timeline</h2>
         <ErrorBanner message={eventsError} />
@@ -206,6 +341,7 @@ export function OrderDetailPage() {
           </ol>
         )}
       </div>
+      )}
     </Layout>
   )
 }

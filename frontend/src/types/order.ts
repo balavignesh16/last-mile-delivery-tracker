@@ -34,6 +34,11 @@ export interface Order {
   cod_surcharge: number
   final_amount: number
 
+  // assigned_agent_id is null until M09 assigns a delivery agent to
+  // this order; it holds the current assignment only — history lives
+  // in the tracking timeline's own ASSIGNED-event metadata.
+  assigned_agent_id: string | null
+
   status: OrderStatus
   created_at: string
 }

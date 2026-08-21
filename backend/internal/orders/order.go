@@ -53,6 +53,12 @@ type Order struct {
 	CODSurcharge float64
 	FinalAmount  float64
 
+	// AssignedAgentID is nil until M09 assigns a delivery_agents.id to
+	// this order (internal/assignment is the only writer). It is the
+	// *current* assignment only — history lives in the ASSIGNED
+	// tracking event's own metadata (M08), not here.
+	AssignedAgentID *string
+
 	Status    string
 	CreatedAt time.Time
 }

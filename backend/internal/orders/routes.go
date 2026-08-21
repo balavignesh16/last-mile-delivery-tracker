@@ -3,6 +3,7 @@ package orders
 import (
 	"github.com/go-chi/chi/v5"
 
+	"lastmiletracker/internal/agents"
 	"lastmiletracker/internal/auth"
 	"lastmiletracker/internal/rates"
 	"lastmiletracker/internal/users"
@@ -14,20 +15,26 @@ import (
 // registers directly on that router rather than wrapping its own
 // r.Route("/api/v1", ...) call.
 //
-// Every route is ADMIN + CUSTOMER; DELIVERY_AGENT gets 403 on all of
-// them — nothing in any source document gives an agent order visibility
-// before assignment exists (M09). usersRepo/zonesRepo/ratesRepo are
-// dependencies of CreateOrderHandler, not this package's own domain —
-// customer validation (users), zone/area resolution and rate pricing
-// (M06's rates.CalculateQuote) all happen through them.
-func Mount(ordersRepo Repository, usersRepo users.Repository, zonesRepo zones.Repository, ratesRepo rates.Repository, jwtSecret string) func(chi.Router) {
+// POST /orders stays ADMIN + CUSTOMER only — nothing changed there, an
+// agent still cannot create an order. The two GET routes now also admit
+// DELIVERY_AGENT (M09): once assigned_agent_id exists, an agent needs
+// to see the orders assigned to them, scoped server-side in the
+// handlers (never by a client-supplied filter) — see handler.go.
+// agentsRepo is a new dependency of both GET handlers, needed only to
+// resolve a DELIVERY_AGENT caller's own agent id from their JWT's user
+// id; usersRepo/zonesRepo/ratesRepo remain CreateOrderHandler's
+// dependencies exactly as in M07.
+func Mount(ordersRepo Repository, usersRepo users.Repository, zonesRepo zones.Repository, ratesRepo rates.Repository, agentsRepo agents.Repository, jwtSecret string) func(chi.Router) {
 	return func(v1 chi.Router) {
-		customerOrAdmin := func(r chi.Router) chi.Router {
+		createRoles := func(r chi.Router) chi.Router {
 			return r.With(auth.RequireAuth(jwtSecret), auth.RequireRole(users.RoleAdmin, users.RoleCustomer))
 		}
+		readRoles := func(r chi.Router) chi.Router {
+			return r.With(auth.RequireAuth(jwtSecret), auth.RequireRole(users.RoleAdmin, users.RoleCustomer, users.RoleDeliveryAgent))
+		}
 
-		customerOrAdmin(v1).Post("/orders", CreateOrderHandler(ordersRepo, usersRepo, zonesRepo, ratesRepo))
-		customerOrAdmin(v1).Get("/orders", ListOrdersHandler(ordersRepo))
-		customerOrAdmin(v1).Get("/orders/{id}", GetOrderHandler(ordersRepo))
+		createRoles(v1).Post("/orders", CreateOrderHandler(ordersRepo, usersRepo, zonesRepo, ratesRepo))
+		readRoles(v1).Get("/orders", ListOrdersHandler(ordersRepo, agentsRepo))
+		readRoles(v1).Get("/orders/{id}", GetOrderHandler(ordersRepo, agentsRepo))
 	}
 }

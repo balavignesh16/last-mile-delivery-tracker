@@ -11,9 +11,19 @@ module except for one small, deliberate refactor (see "Reuse, not
 duplication" below).
 
 Explicitly out of scope, per the frozen module split: order status
-transitions and the M08 state machine, delivery-agent assignment (M09),
-tracking, notifications, order filtering by status/zone/agent, order
-editing/cancellation/deletion, payment processing.
+transitions and the M08 state machine, delivery-agent assignment
+(M09 — now implemented, see `docs/assignment-engine.md`), notifications,
+order filtering by status/zone/agent, order editing/cancellation/deletion,
+payment processing.
+
+**Updated by M09**: `orders` gained one column, `assigned_agent_id`
+(migration `0010`) — the current agent an order is assigned to, current-
+state-only (assignment history lives in M08's own tracking-event
+metadata, not here). `internal/orders` never writes this column itself;
+only `internal/assignment` does, inside its own atomic assign/auto-assign
+transaction. `GET /orders` and `GET /orders/{id}` widened to also admit
+`DELIVERY_AGENT`, scoped to their own assigned orders — see "API" below
+and `docs/assignment-engine.md`.
 
 ## Reuse, not duplication: `rates.CalculateQuote`
 
@@ -166,7 +176,7 @@ later transition belongs to `internal/tracking`. See
 | Mass assignment of any server-derived field (`id`, `created_by`, `pickup_zone_id`, `drop_zone_id`, `zone_relationship`, `rate_card_id`, `volumetric_weight_kg`, `chargeable_weight_kg`, `base_rate`, `cod_surcharge`, `final_amount`, `status`, `created_at`) | None of these fields exist on either request DTO; `DisallowUnknownFields` rejects the whole request |
 | Admin assigns an order to a non-customer account | `users.FindByID` + a `Role == CUSTOMER` check, both before any pricing or persistence happens |
 | IDOR on `GET /orders/{id}` | Ownership check (`order.CustomerID == identity.UserID`) for `CUSTOMER` callers, `404` on mismatch — never `403`, so the endpoint never confirms an order exists under an id the caller doesn't own. Same convention as M04's area-vs-zone and M05's slab-vs-rate-card path checks |
-| `DELIVERY_AGENT` order visibility | `403` on all three endpoints — nothing in any source document gives an agent order access before assignment exists (M09) |
+| `DELIVERY_AGENT` order visibility | `403` on `POST /orders` (agents never create orders); on the two `GET` endpoints (M09), scoped strictly to their own assigned orders (`orders.assigned_agent_id` resolved from their JWT's user id via `agents.Repository.FindByUserID`) — never every customer's order, and ownership mismatch on `GET /orders/{id}` is `404`, same convention as the `CUSTOMER` row above |
 | Price tampering | Impossible by construction — no pricing field is ever accepted as input on either DTO; every one is `CalculateQuote`'s output |
 | SQL injection | Every query in `internal/orders/repository.go` is parameterized; no string concatenation into SQL anywhere |
 
@@ -178,12 +188,13 @@ and the RBAC table. In short:
 | Endpoint | Role |
 |---|---|
 | `POST /api/v1/orders` | `ADMIN`, `CUSTOMER` |
-| `GET /api/v1/orders` | `ADMIN` (all), `CUSTOMER` (own only) |
-| `GET /api/v1/orders/{id}` | `ADMIN` (any), `CUSTOMER` (own only, else `404`) |
+| `GET /api/v1/orders` | `ADMIN` (all), `CUSTOMER` (own only), `DELIVERY_AGENT` (own assigned only, since M09) |
+| `GET /api/v1/orders/{id}` | `ADMIN` (any), `CUSTOMER` (own only, else `404`), `DELIVERY_AGENT` (own assigned only, else `404`, since M09) |
 
-No status/zone/agent filter query parameters — nothing in this
-milestone produces fields worth filtering on yet (every order is
-`CREATED`, no agent is assigned). Filtering arrives when M08/M09 do.
+No status/zone filter query parameters — nothing in this milestone
+produces fields worth filtering by status/zone yet. Filtering by
+agent-assignment is implicit in the `DELIVERY_AGENT` role's own scoped
+view above rather than a query parameter any role can pass.
 
 ## Testing
 

@@ -24,6 +24,21 @@ type Repository interface {
 	// Returns ErrOrderNotFound, ErrInvalidTransition, or
 	// ErrForbiddenTransition on failure.
 	Transition(ctx context.Context, orderID, actorID string, role users.Role, newStatus Status, metadata json.RawMessage) (Event, error)
+	// TransitionTx is Transition's exact same validated/authorized write
+	// — lock, check edge legality, check role, update orders.status,
+	// insert the tracking event — performed on a transaction the caller
+	// already owns, rather than one this method opens and commits
+	// itself. Added for M09: order assignment must write
+	// orders.assigned_agent_id and set the agent BUSY in the *same*
+	// atomic unit as the status transition, which is only possible if
+	// the transition runs inside the caller's own transaction rather
+	// than committing independently. Transition itself is now a thin
+	// wrapper around this — same state-machine code, same
+	// authorization matrix, zero behavior change to the existing
+	// endpoint (verified by M08's full test suite passing unchanged).
+	// The caller is responsible for beginning and committing/rolling
+	// back tx; this method never does either.
+	TransitionTx(ctx context.Context, tx pgx.Tx, orderID, actorID string, role users.Role, newStatus Status, metadata json.RawMessage) (Event, error)
 	// OrderCustomerID returns the customer_id of the named order, for
 	// the ownership check GetTrackingHandler needs before it may show a
 	// CUSTOMER caller an order's timeline. Returns ErrOrderNotFound if
@@ -65,8 +80,23 @@ func (r *PostgresRepository) Transition(ctx context.Context, orderID, actorID st
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
 
+	event, err := r.TransitionTx(ctx, tx, orderID, actorID, role, newStatus, metadata)
+	if err != nil {
+		return Event{}, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return Event{}, fmt.Errorf("commit transition: %w", err)
+	}
+	return event, nil
+}
+
+// TransitionTx is the actual validated write — see the Repository
+// interface doc for why this exists as a caller-transaction-scoped
+// method separate from Transition.
+func (r *PostgresRepository) TransitionTx(ctx context.Context, tx pgx.Tx, orderID, actorID string, role users.Role, newStatus Status, metadata json.RawMessage) (Event, error) {
 	var currentStatus string
-	err = tx.QueryRow(ctx, `SELECT status FROM orders WHERE id = $1 FOR UPDATE`, orderID).Scan(&currentStatus)
+	err := tx.QueryRow(ctx, `SELECT status FROM orders WHERE id = $1 FOR UPDATE`, orderID).Scan(&currentStatus)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Event{}, ErrOrderNotFound
@@ -101,9 +131,6 @@ func (r *PostgresRepository) Transition(ctx context.Context, orderID, actorID st
 		return Event{}, fmt.Errorf("record tracking event: %w", err)
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return Event{}, fmt.Errorf("commit transition: %w", err)
-	}
 	return event, nil
 }
 

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"lastmiletracker/internal/agents"
+	"lastmiletracker/internal/assignment"
 	"lastmiletracker/internal/auth"
 	"lastmiletracker/internal/config"
 	"lastmiletracker/internal/database"
@@ -74,6 +75,7 @@ func main() {
 	ratesRepo := rates.NewPostgresRepository(pool)
 	ordersRepo := orders.NewPostgresRepository(pool)
 	trackingRepo := tracking.NewPostgresRepository(pool)
+	assignmentRepo := assignment.NewPostgresRepository(pool, agentsRepo, ordersRepo, trackingRepo)
 
 	if err := auth.SeedDemoUsers(ctx, usersRepo, logger); err != nil {
 		logger.Error("demo user seeding failed", "error", err)
@@ -95,8 +97,9 @@ func main() {
 		agents.Mount(agentsRepo, cfg.JWTSecret),
 		zones.Mount(zonesRepo, cfg.JWTSecret),
 		rates.Mount(ratesRepo, zonesRepo, cfg.JWTSecret),
-		orders.Mount(ordersRepo, usersRepo, zonesRepo, ratesRepo, cfg.JWTSecret),
+		orders.Mount(ordersRepo, usersRepo, zonesRepo, ratesRepo, agentsRepo, cfg.JWTSecret),
 		tracking.Mount(trackingRepo, cfg.JWTSecret),
+		assignment.Mount(assignmentRepo, cfg.JWTSecret),
 	)
 	addr := net.JoinHostPort(cfg.ServerHost, cfg.ServerPort)
 	httpServer := &http.Server{

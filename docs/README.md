@@ -45,6 +45,13 @@ Written so far:
   mechanism and its proof, why order creation itself writes the first
   tracking event, the `order_tracking_events` schema, and exactly what
   was deliberately left to M09/M10/M11 (M08).
+- [`assignment-engine.md`](./assignment-engine.md) — the M09 manual and
+  automatic assignment endpoints, the eligibility rule and deterministic
+  ranking algorithm (and why no geographic-distance ranking exists), why
+  M08's state machine is reused rather than duplicated, the four
+  concurrency races and their PostgreSQL-level protection, the
+  `orders.assigned_agent_id` schema addition, and the widened
+  `DELIVERY_AGENT` order-visibility rules (M09).
 
 The rest don't exist yet — the root [README.md](../README.md) carries each
 completed module's summary directly, and links into this directory as

@@ -9,14 +9,15 @@ import { listOrders } from '../services/orders'
 import type { Order } from '../types/order'
 import { formatCurrency } from '../utils/currency'
 
-// ADMIN sees every order; CUSTOMER sees only their own — the backend
-// decides which by the caller's role (GET /orders), so this page never
-// sends a filter of its own. No status/zone/agent filtering here by
-// design — M07 doesn't add it (see docs/order-management.md); those
-// fields aren't meaningful until M08/M09 exist.
+// ADMIN sees every order, CUSTOMER sees only their own, and (since
+// M09) DELIVERY_AGENT sees only orders currently assigned to them —
+// the backend decides which by the caller's role (GET /orders), so
+// this page never sends a filter of its own. No status/zone filtering
+// here by design — M07 doesn't add it (see docs/order-management.md).
 export function OrdersPage() {
   const { token, user } = useAuth()
   const isAdmin = user?.role === 'ADMIN'
+  const isDeliveryAgent = user?.role === 'DELIVERY_AGENT'
 
   const [orders, setOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(true)
@@ -43,10 +44,12 @@ export function OrdersPage() {
   return (
     <Layout>
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">{isAdmin ? 'All orders' : 'My orders'}</h1>
-        <Link to="/orders/new" className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700">
-          New order
-        </Link>
+        <h1 className="text-xl font-semibold">{isAdmin ? 'All orders' : isDeliveryAgent ? 'My assigned orders' : 'My orders'}</h1>
+        {!isDeliveryAgent && (
+          <Link to="/orders/new" className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700">
+            New order
+          </Link>
+        )}
       </div>
 
       <div className="mt-6 rounded-lg border border-slate-200 bg-white shadow-sm">

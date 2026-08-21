@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"lastmiletracker/internal/agents"
 	"lastmiletracker/internal/rates"
 	"lastmiletracker/internal/users"
 	"lastmiletracker/internal/zones"
@@ -333,10 +334,95 @@ func (f *fakeOrdersRepo) ListAllOrders(_ context.Context) ([]Order, error) {
 	return out, nil
 }
 
+func (f *fakeOrdersRepo) ListOrdersForAgent(_ context.Context, agentID string) ([]Order, error) {
+	var out []Order
+	for _, o := range f.byID {
+		if o.AssignedAgentID != nil && *o.AssignedAgentID == agentID {
+			out = append(out, o)
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeOrdersRepo) FindOrderByID(_ context.Context, id string) (Order, error) {
 	o, ok := f.byID[id]
 	if !ok {
 		return Order{}, ErrOrderNotFound
 	}
 	return o, nil
+}
+
+// assign is a test-only helper (not part of the Repository interface)
+// letting handler tests seed an already-assigned order directly,
+// without going through the real M09 assignment flow.
+func (f *fakeOrdersRepo) assign(orderID, agentID string) {
+	o := f.byID[orderID]
+	o.AssignedAgentID = &agentID
+	f.byID[orderID] = o
+}
+
+// --- fakeAgentsRepo ---
+
+type fakeAgentsRepo struct {
+	byID     map[string]agents.AgentWithUser
+	byUserID map[string]string // userID -> agentID
+}
+
+func newFakeAgentsRepo() *fakeAgentsRepo {
+	return &fakeAgentsRepo{byID: map[string]agents.AgentWithUser{}, byUserID: map[string]string{}}
+}
+
+func (f *fakeAgentsRepo) seed(agentID, userID string) agents.AgentWithUser {
+	a := agents.AgentWithUser{ID: agentID, UserID: userID, Availability: agents.AvailabilityAvailable, Active: true, CreatedAt: time.Now()}
+	f.byID[agentID] = a
+	f.byUserID[userID] = agentID
+	return a
+}
+
+func (f *fakeAgentsRepo) Create(_ context.Context, _ agents.CreateAgentInput) (agents.AgentWithUser, error) {
+	return agents.AgentWithUser{}, errors.New("not implemented in fake")
+}
+
+func (f *fakeAgentsRepo) List(_ context.Context) ([]agents.AgentWithUser, error) {
+	out := make([]agents.AgentWithUser, 0, len(f.byID))
+	for _, a := range f.byID {
+		out = append(out, a)
+	}
+	return out, nil
+}
+
+func (f *fakeAgentsRepo) FindByID(_ context.Context, id string) (agents.AgentWithUser, error) {
+	a, ok := f.byID[id]
+	if !ok {
+		return agents.AgentWithUser{}, agents.ErrNotFound
+	}
+	return a, nil
+}
+
+func (f *fakeAgentsRepo) FindByUserID(_ context.Context, userID string) (agents.AgentWithUser, error) {
+	agentID, ok := f.byUserID[userID]
+	if !ok {
+		return agents.AgentWithUser{}, agents.ErrNotFound
+	}
+	return f.byID[agentID], nil
+}
+
+func (f *fakeAgentsRepo) UpdateAvailability(_ context.Context, id string, availability agents.Availability) (agents.AgentWithUser, error) {
+	a, ok := f.byID[id]
+	if !ok {
+		return agents.AgentWithUser{}, agents.ErrNotFound
+	}
+	a.Availability = availability
+	f.byID[id] = a
+	return a, nil
+}
+
+func (f *fakeAgentsRepo) UpdateLocation(_ context.Context, id string, lat, lng float64) (agents.AgentWithUser, error) {
+	a, ok := f.byID[id]
+	if !ok {
+		return agents.AgentWithUser{}, agents.ErrNotFound
+	}
+	a.CurrentLat, a.CurrentLng = &lat, &lng
+	f.byID[id] = a
+	return a, nil
 }

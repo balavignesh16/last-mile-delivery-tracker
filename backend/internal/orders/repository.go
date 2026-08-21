@@ -36,6 +36,12 @@ type Repository interface {
 	// view of GET /orders. No filtering: M07 explicitly does not add
 	// status/zone/agent query parameters (see docs/order-management.md).
 	ListAllOrders(ctx context.Context) ([]Order, error)
+	// ListOrdersForAgent returns only the orders currently assigned to
+	// one delivery agent, newest first — the DELIVERY_AGENT-facing view
+	// of GET /orders (M09). Added alongside ListOrdersForCustomer/
+	// ListAllOrders rather than a single parameterized method, matching
+	// this project's existing "one method per caller-role view" style.
+	ListOrdersForAgent(ctx context.Context, agentID string) ([]Order, error)
 	FindOrderByID(ctx context.Context, id string) (Order, error)
 }
 
@@ -47,13 +53,18 @@ func NewPostgresRepository(pool *pgxpool.Pool) *PostgresRepository {
 	return &PostgresRepository{pool: pool}
 }
 
-const orderColumns = `
+// Columns and ScanOrder are exported (M09) so internal/assignment can
+// re-select and scan a full order row inside its own transaction after
+// writing an assignment, without a second, drifting copy of this
+// column list — the same reuse precedent internal/rates set for
+// ValidateQuoteFields/MapQuoteError (M06).
+const Columns = `
 	id, customer_id, created_by, order_type, payment_type,
 	pickup_area_id, drop_area_id, pickup_zone_id, drop_zone_id, zone_relationship,
 	length_cm::float8, breadth_cm::float8, height_cm::float8, actual_weight_kg::float8,
 	volumetric_weight_kg::float8, chargeable_weight_kg::float8,
 	rate_card_id, base_rate::float8, cod_surcharge::float8, final_amount::float8,
-	status, created_at`
+	assigned_agent_id, status, created_at`
 
 // CreateOrder writes every pricing-derived column directly from
 // input.Quote (a rates.QuoteResult) — it never independently computes
@@ -85,9 +96,9 @@ func (r *PostgresRepository) CreateOrder(ctx context.Context, input CreateOrderI
 			volumetric_weight_kg, chargeable_weight_kg,
 			rate_card_id, base_rate, cod_surcharge, final_amount, status
 		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
-		RETURNING ` + orderColumns
+		RETURNING ` + Columns
 
-	o, err := scanOrder(tx.QueryRow(ctx, stmt,
+	o, err := ScanOrder(tx.QueryRow(ctx, stmt,
 		input.CustomerID, input.CreatedBy, q.OrderType, q.PaymentType,
 		q.PickupArea.ID, q.DropArea.ID, q.PickupZone.ID, q.DropZone.ID, q.ZoneRelationship,
 		q.LengthCM, q.BreadthCM, q.HeightCM, q.ActualWeightKG,
@@ -112,7 +123,7 @@ func (r *PostgresRepository) CreateOrder(ctx context.Context, input CreateOrderI
 }
 
 func (r *PostgresRepository) ListOrdersForCustomer(ctx context.Context, customerID string) ([]Order, error) {
-	rows, err := r.pool.Query(ctx, `SELECT `+orderColumns+` FROM orders WHERE customer_id = $1 ORDER BY created_at DESC`, customerID)
+	rows, err := r.pool.Query(ctx, `SELECT `+Columns+` FROM orders WHERE customer_id = $1 ORDER BY created_at DESC`, customerID)
 	if err != nil {
 		return nil, fmt.Errorf("list orders for customer: %w", err)
 	}
@@ -121,7 +132,7 @@ func (r *PostgresRepository) ListOrdersForCustomer(ctx context.Context, customer
 }
 
 func (r *PostgresRepository) ListAllOrders(ctx context.Context) ([]Order, error) {
-	rows, err := r.pool.Query(ctx, `SELECT `+orderColumns+` FROM orders ORDER BY created_at DESC`)
+	rows, err := r.pool.Query(ctx, `SELECT `+Columns+` FROM orders ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("list all orders: %w", err)
 	}
@@ -129,9 +140,18 @@ func (r *PostgresRepository) ListAllOrders(ctx context.Context) ([]Order, error)
 	return scanOrders(rows)
 }
 
+func (r *PostgresRepository) ListOrdersForAgent(ctx context.Context, agentID string) ([]Order, error) {
+	rows, err := r.pool.Query(ctx, `SELECT `+Columns+` FROM orders WHERE assigned_agent_id = $1 ORDER BY created_at DESC`, agentID)
+	if err != nil {
+		return nil, fmt.Errorf("list orders for agent: %w", err)
+	}
+	defer rows.Close()
+	return scanOrders(rows)
+}
+
 func (r *PostgresRepository) FindOrderByID(ctx context.Context, id string) (Order, error) {
-	row := r.pool.QueryRow(ctx, `SELECT `+orderColumns+` FROM orders WHERE id = $1`, id)
-	o, err := scanOrder(row)
+	row := r.pool.QueryRow(ctx, `SELECT `+Columns+` FROM orders WHERE id = $1`, id)
+	o, err := ScanOrder(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Order{}, ErrOrderNotFound
@@ -148,7 +168,7 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
-func scanOrder(row rowScanner) (Order, error) {
+func ScanOrder(row rowScanner) (Order, error) {
 	var o Order
 	err := row.Scan(
 		&o.ID, &o.CustomerID, &o.CreatedBy, &o.OrderType, &o.PaymentType,
@@ -156,7 +176,7 @@ func scanOrder(row rowScanner) (Order, error) {
 		&o.LengthCM, &o.BreadthCM, &o.HeightCM, &o.ActualWeightKG,
 		&o.VolumetricWeightKG, &o.ChargeableWeightKG,
 		&o.RateCardID, &o.BaseRate, &o.CODSurcharge, &o.FinalAmount,
-		&o.Status, &o.CreatedAt,
+		&o.AssignedAgentID, &o.Status, &o.CreatedAt,
 	)
 	return o, err
 }
@@ -164,7 +184,7 @@ func scanOrder(row rowScanner) (Order, error) {
 func scanOrders(rows pgx.Rows) ([]Order, error) {
 	var out []Order
 	for rows.Next() {
-		o, err := scanOrder(rows)
+		o, err := ScanOrder(rows)
 		if err != nil {
 			return nil, fmt.Errorf("scan order: %w", err)
 		}

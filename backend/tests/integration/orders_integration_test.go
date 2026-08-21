@@ -9,9 +9,11 @@ import (
 	"net/http"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"lastmiletracker/internal/agents"
 	"lastmiletracker/internal/auth"
 	"lastmiletracker/internal/database"
 	"lastmiletracker/internal/orders"
@@ -50,11 +52,12 @@ func setupOrdersTest(t *testing.T) (router http.Handler, usersRepo users.Reposit
 	zRepo := zones.NewPostgresRepository(p)
 	rRepo := rates.NewPostgresRepository(p)
 	oRepo := orders.NewPostgresRepository(p)
+	aRepo := agents.NewPostgresRepository(p)
 	r := server.NewRouter(p, testLogger(),
 		auth.Mount(uRepo, agentsIntegrationJWTSecret),
 		zones.Mount(zRepo, agentsIntegrationJWTSecret),
 		rates.Mount(rRepo, zRepo, agentsIntegrationJWTSecret),
-		orders.Mount(oRepo, uRepo, zRepo, rRepo, agentsIntegrationJWTSecret),
+		orders.Mount(oRepo, uRepo, zRepo, rRepo, aRepo, agentsIntegrationJWTSecret),
 	)
 	return r, uRepo, zRepo, rRepo, oRepo, p
 }
@@ -402,8 +405,92 @@ func TestOrderList_AdminSeesAll(t *testing.T) {
 	}
 }
 
+func TestOrderList_DeliveryAgentSeesOnlyAssignedOrders(t *testing.T) {
+	router, uRepo, zRepo, _, _, pool := setupOrdersTest(t)
+	admin := adminToken(t, uRepo)
+	customer := customerToken(t, uRepo)
+	aRepo := agents.NewPostgresRepository(pool)
+
+	hash, err := auth.HashPassword("password123")
+	if err != nil {
+		t.Fatalf("HashPassword() error: %v", err)
+	}
+	myAgentUser, err := uRepo.Create(context.Background(), users.NewUser{Email: uniqueEmail("order-agent-mine"), PasswordHash: hash, FullName: "Mine", Role: users.RoleDeliveryAgent})
+	if err != nil {
+		t.Fatalf("seed agent user failed: %v", err)
+	}
+	myAgent, err := aRepo.Create(context.Background(), agents.CreateAgentInput{Email: uniqueEmail("order-agent-mine-record"), PasswordHash: hash, FullName: "Mine Record"})
+	if err != nil {
+		t.Fatalf("Create agent record failed: %v", err)
+	}
+	_ = myAgentUser
+	otherAgent, err := aRepo.Create(context.Background(), agents.CreateAgentInput{Email: uniqueEmail("order-agent-other-record"), PasswordHash: hash, FullName: "Other Record"})
+	if err != nil {
+		t.Fatalf("Create other agent record failed: %v", err)
+	}
+	myAgentToken, err := auth.GenerateToken(agentsIntegrationJWTSecret, myAgent.UserID, users.RoleDeliveryAgent, time.Hour)
+	if err != nil {
+		t.Fatalf("GenerateToken() error: %v", err)
+	}
+
+	zoneID, pickupID := createZoneAndArea(t, zRepo, uniqueEmail("order-agent-list-zone"), "Pickup")
+	dropArea, err := zRepo.CreateArea(context.Background(), zoneID, zones.CreateAreaInput{Name: "Drop"})
+	if err != nil {
+		t.Fatalf("CreateArea() error: %v", err)
+	}
+	cardID := setupActiveRateCard(t, router, pool, admin, "B2C", "INTRA", 0)
+	addSlab(t, router, admin, cardID, 0, nil, 40)
+	body := fmt.Sprintf(`{"pickup_area_id":%q,"drop_area_id":%q,"order_type":"B2C","payment_type":"PREPAID","length_cm":1,"breadth_cm":1,"height_cm":1,"actual_weight_kg":1}`,
+		pickupID, dropArea.ID)
+
+	createOrder := func() string {
+		rec := doJSON(router, http.MethodPost, "/api/v1/orders", customer, body)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("order create failed: %d %s", rec.Code, rec.Body.String())
+		}
+		return decodeOrder(t, rec.Body.Bytes())["id"].(string)
+	}
+	assignedToMe := createOrder()
+	assignedToOther := createOrder()
+	createOrder() // unassigned, must not appear for either agent
+
+	if _, err := pool.Exec(context.Background(), `UPDATE orders SET assigned_agent_id = $1 WHERE id = $2`, myAgent.ID, assignedToMe); err != nil {
+		t.Fatalf("seed assignment failed: %v", err)
+	}
+	if _, err := pool.Exec(context.Background(), `UPDATE orders SET assigned_agent_id = $1 WHERE id = $2`, otherAgent.ID, assignedToOther); err != nil {
+		t.Fatalf("seed assignment failed: %v", err)
+	}
+
+	listRec := doJSON(router, http.MethodGet, "/api/v1/orders", myAgentToken, "")
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("agent list status = %d, body: %s", listRec.Code, listRec.Body.String())
+	}
+	var list []map[string]any
+	if err := json.NewDecoder(listRec.Body).Decode(&list); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(list) != 1 || list[0]["id"] != assignedToMe {
+		t.Errorf("agent's order list = %v, want exactly the one order assigned to them", list)
+	}
+
+	getOwn := doJSON(router, http.MethodGet, "/api/v1/orders/"+assignedToMe, myAgentToken, "")
+	if getOwn.Code != http.StatusOK {
+		t.Errorf("agent GET own assigned order status = %d, want %d", getOwn.Code, http.StatusOK)
+	}
+	getOther := doJSON(router, http.MethodGet, "/api/v1/orders/"+assignedToOther, myAgentToken, "")
+	if getOther.Code != http.StatusNotFound {
+		t.Errorf("agent GET another agent's assigned order status = %d, want %d (must not reveal existence)", getOther.Code, http.StatusNotFound)
+	}
+}
+
 // --- RBAC ---
 
+// TestOrderEndpoints_DeliveryAgentAndUnauthenticatedForbidden covers
+// what's still forbidden after M09 widened GET /orders and GET
+// /orders/:id to DELIVERY_AGENT: creating an order remains ADMIN/
+// CUSTOMER only, and every route still rejects an unauthenticated
+// caller outright. DELIVERY_AGENT read-scoping itself (only their own
+// assigned orders) is covered by TestOrderList_DeliveryAgentSeesOnlyAssignedOrders.
 func TestOrderEndpoints_DeliveryAgentAndUnauthenticatedForbidden(t *testing.T) {
 	router, uRepo, zRepo, _, _, pool := setupOrdersTest(t)
 	admin := adminToken(t, uRepo)
@@ -428,8 +515,8 @@ func TestOrderEndpoints_DeliveryAgentAndUnauthenticatedForbidden(t *testing.T) {
 		want   int
 	}{
 		{"agent POST forbidden", http.MethodPost, "/api/v1/orders", agent, body, http.StatusForbidden},
-		{"agent GET list forbidden", http.MethodGet, "/api/v1/orders", agent, "", http.StatusForbidden},
-		{"agent GET one forbidden", http.MethodGet, "/api/v1/orders/00000000-0000-0000-0000-000000000000", agent, "", http.StatusForbidden},
+		{"agent GET list allowed (scoped, empty without an agent record)", http.MethodGet, "/api/v1/orders", agent, "", http.StatusOK},
+		{"agent GET nonexistent order not found", http.MethodGet, "/api/v1/orders/00000000-0000-0000-0000-000000000000", agent, "", http.StatusNotFound},
 		{"unauthenticated POST rejected", http.MethodPost, "/api/v1/orders", "", body, http.StatusUnauthorized},
 		{"unauthenticated GET list rejected", http.MethodGet, "/api/v1/orders", "", "", http.StatusUnauthorized},
 		{"unauthenticated GET one rejected", http.MethodGet, "/api/v1/orders/00000000-0000-0000-0000-000000000000", "", "", http.StatusUnauthorized},

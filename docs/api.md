@@ -443,6 +443,7 @@ curl -X POST http://localhost:8080/api/v1/orders \
   "length_cm": 10, "breadth_cm": 10, "height_cm": 10, "actual_weight_kg": 3,
   "volumetric_weight_kg": 0.2, "chargeable_weight_kg": 3,
   "rate_card_id": "...", "base_rate": 55, "cod_surcharge": 18, "final_amount": 73,
+  "assigned_agent_id": null,
   "status": "CREATED", "created_at": "2026-08-21T09:21:32Z"
 }
 ```
@@ -457,19 +458,19 @@ sending any of them is rejected outright (`422`, unknown field).
 
 ### `GET /api/v1/orders`
 
-**Auth**: required, **ADMIN or CUSTOMER**. **Purpose**: list orders — every order for `ADMIN`, only the caller's own for `CUSTOMER`. No query-parameter filters (by status, zone, or agent) — not in the M07/M08 endpoint list; filtering by agent still isn't meaningful until M09 adds agent assignment.
+**Auth**: required, **ADMIN, CUSTOMER, or DELIVERY_AGENT** (widened from ADMIN/CUSTOMER by M09). **Purpose**: list orders — every order for `ADMIN`, only the caller's own for `CUSTOMER`, only the orders currently assigned to them for `DELIVERY_AGENT` (never every customer's order). No query-parameter filters (by status or zone) — not in the endpoint list; agent-scoping is implicit in the `DELIVERY_AGENT` role's own view, not a filter any role can pass.
 
 ```bash
 curl http://localhost:8080/api/v1/orders -H "Authorization: Bearer $TOKEN"
 ```
 
-Response: a JSON array of the same shape `POST /orders` returns.
+Response: a JSON array of the same shape `POST /orders` returns, now also carrying `assigned_agent_id` (`null` until M09 assigns an agent).
 
 ### `GET /api/v1/orders/{id}`
 
-**Auth**: required, **ADMIN or CUSTOMER**. **Purpose**: retrieve one order. `ADMIN` may retrieve any order; `CUSTOMER` only their own — requesting another customer's order id returns `404`, never `403` or any other signal that the order exists, the same ownership convention M04's area-vs-zone and M05's slab-vs-rate-card path checks use.
+**Auth**: required, **ADMIN, CUSTOMER, or DELIVERY_AGENT** (widened by M09). **Purpose**: retrieve one order. `ADMIN` may retrieve any order; `CUSTOMER` only their own; `DELIVERY_AGENT` only an order currently assigned to them — requesting an order the caller doesn't own/isn't assigned returns `404`, never `403` or any other signal that the order exists, the same ownership convention M04's area-vs-zone and M05's slab-vs-rate-card path checks use.
 
-**Errors**: `401`, `403` (`DELIVERY_AGENT`), `404` (unknown id, or a `CUSTOMER` requesting an order they don't own).
+**Errors**: `401`, `404` (unknown id, a `CUSTOMER` requesting an order they don't own, or a `DELIVERY_AGENT` requesting an order not assigned to them).
 
 ---
 
@@ -484,7 +485,7 @@ initial `CREATED` event is written by order creation itself).
 
 ### `POST /api/v1/orders/:id/status`
 
-**Auth**: required, **ADMIN or DELIVERY_AGENT** (`CUSTOMER` → `403` — customers have no status-transition authority in this module). **Purpose**: perform one legal state transition. Which of `ADMIN`/`DELIVERY_AGENT` may use a given edge depends on the edge itself, not just the route — see the authorization matrix in `docs/order-tracking.md`. `DELIVERY_AGENT` authority is temporarily unscoped: no `assigned_agent_id` relationship exists until M09, so any authenticated agent may perform an agent-tier edge on any order (a documented, finalized M08 decision, not an oversight).
+**Auth**: required, **ADMIN or DELIVERY_AGENT** (`CUSTOMER` → `403` — customers have no status-transition authority in this module). **Purpose**: perform one legal state transition. Which of `ADMIN`/`DELIVERY_AGENT` may use a given edge depends on the edge itself, not just the route — see the authorization matrix in `docs/order-tracking.md`. `DELIVERY_AGENT` authority remains unscoped by ownership even after M09: `orders.assigned_agent_id` now exists, but this endpoint's own authorization was deliberately left unmodified (a finalized M09 decision — M08 remains the single source of truth, unchanged), so any authenticated agent may still perform an agent-tier edge on any order.
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/orders/$ORDER_ID/status \
@@ -524,6 +525,62 @@ Response: a JSON array of the same event shape `POST .../status` returns. The fi
 
 ---
 
+## Assignment (M09)
+
+Manual and automatic delivery-agent assignment. Owns exactly one new
+column (`orders.assigned_agent_id`) and no new table — assignment
+history lives in M08's own tracking-event metadata. See
+`docs/assignment-engine.md` for the full design (the ranking algorithm,
+eligibility rule, concurrency strategy, and why M08's state machine is
+reused rather than duplicated).
+
+### `POST /api/v1/orders/:id/assign`
+
+**Auth**: required, **ADMIN only** (`CUSTOMER`/`DELIVERY_AGENT` → `403`). **Purpose**: manually assign one named delivery agent to an order. Body: `{"agent_id": "<uuid>"}` — no other field; the order id comes from the URL, the actor from the JWT.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/orders/$ORDER_ID/assign \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"agent_id":"..."}'
+```
+
+```json
+{
+  "id": "...", "customer_id": "...", "created_by": "...",
+  "order_type": "B2C", "payment_type": "COD",
+  "pickup_area_id": "...", "drop_area_id": "...",
+  "pickup_zone_id": "...", "drop_zone_id": "...", "zone_relationship": "INTRA",
+  "length_cm": 10, "breadth_cm": 10, "height_cm": 10, "actual_weight_kg": 3,
+  "volumetric_weight_kg": 0.2, "chargeable_weight_kg": 3,
+  "rate_card_id": "...", "base_rate": 55, "cod_surcharge": 18, "final_amount": 73,
+  "assigned_agent_id": "...",
+  "status": "ASSIGNED", "created_at": "2026-08-21T09:21:32Z"
+}
+```
+
+The response is the updated order — the same shape every other order
+endpoint returns, not a separate assignment resource. The tracking
+event this transition also produces (with `metadata:
+{"assigned_agent_id": "..."}`) is available, unchanged, via `GET
+/orders/:id/tracking`.
+
+**Errors**: `401`, `403` (non-`ADMIN`), `404` (unknown order or unknown `agent_id`), `409` (the named agent exists but fails the eligibility rule — inactive, not `AVAILABLE`, or no usable `current_zone_id` — or the order isn't currently in a status M08 permits `→ASSIGNED` from, including an order that is already `ASSIGNED`), `422` (malformed body, missing `agent_id`, or an unknown field).
+
+### `POST /api/v1/orders/:id/auto-assign`
+
+**Auth**: required, **ADMIN only**. **Purpose**: automatically select and assign the best-ranked eligible agent. No request body fields — every input the ranking algorithm needs is read fresh from the order (its pickup zone) and the `delivery_agents` table.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/orders/$ORDER_ID/auto-assign \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+Response: the same updated-order shape as `POST .../assign`.
+
+**Errors**: `401`, `403` (non-`ADMIN`), `404` (unknown order), `409` (no agent satisfies the eligibility rule, or the order isn't currently in a status M08 permits `→ASSIGNED` from).
+
+---
+
 ## What's not here yet
 
-Agent assignment, reschedule-date capture, notifications, and dashboards — M09 through M12. This file grows with each module.
+Reschedule-date capture, notifications, and dashboards — M10 through M12. This file grows with each module.

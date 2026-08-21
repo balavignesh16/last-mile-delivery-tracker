@@ -42,9 +42,14 @@ export function Layout({ children }: { children: ReactNode }) {
                   </>
                 )}
                 {user.role === 'DELIVERY_AGENT' && (
-                  <Link to="/agent" className="text-slate-600 hover:text-slate-900">
-                    Operations
-                  </Link>
+                  <>
+                    <Link to="/orders" className="text-slate-600 hover:text-slate-900">
+                      My Assigned Orders
+                    </Link>
+                    <Link to="/agent" className="text-slate-600 hover:text-slate-900">
+                      Operations
+                    </Link>
+                  </>
                 )}
                 <span className="text-slate-400">{user.email}</span>
                 <button

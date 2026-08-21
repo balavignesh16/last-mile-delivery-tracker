@@ -12,7 +12,7 @@ function jsonResponse(status: number, body: unknown): Response {
   return { ok: status >= 200 && status < 300, status, json: async () => body } as Response
 }
 
-function mockAuth(role: 'CUSTOMER' | 'ADMIN') {
+function mockAuth(role: 'CUSTOMER' | 'ADMIN' | 'DELIVERY_AGENT') {
   const user: UserProfile = {
     id: 'user-1',
     email: 'user@example.com',
@@ -86,6 +86,20 @@ describe('OrdersPage', () => {
     )
 
     await waitFor(() => expect(screen.getByText('All orders')).toBeTruthy())
+  })
+
+  it('shows "My assigned orders" and no "New order" link for a DELIVERY_AGENT caller', async () => {
+    mockAuth('DELIVERY_AGENT')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, [order])))
+
+    render(
+      <MemoryRouter>
+        <OrdersPage />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText('My assigned orders')).toBeTruthy())
+    expect(screen.queryByText('New order')).toBeNull()
   })
 
   it('shows a server error banner when the order list fails to load', async () => {
