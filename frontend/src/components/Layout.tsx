@@ -23,6 +23,9 @@ export function Layout({ children }: { children: ReactNode }) {
                     <Link to="/admin/zones" className="text-slate-600 hover:text-slate-900">
                       Zones
                     </Link>
+                    <Link to="/admin/rates" className="text-slate-600 hover:text-slate-900">
+                      Rates
+                    </Link>
                     <Link to="/admin/agents" className="text-slate-600 hover:text-slate-900">
                       Agents
                     </Link>

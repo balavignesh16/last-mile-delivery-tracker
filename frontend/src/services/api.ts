@@ -71,6 +71,10 @@ export function apiPut<T>(path: string, body: unknown, token?: string): Promise<
   })
 }
 
+export function apiDelete<T>(path: string, token?: string): Promise<T> {
+  return apiRequest<T>(path, { method: 'DELETE', headers: authHeaders(token) })
+}
+
 function authHeaders(token?: string): HeadersInit {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }

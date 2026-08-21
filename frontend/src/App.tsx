@@ -3,6 +3,7 @@ import { ProtectedRoute } from './components/ProtectedRoute'
 import { AuthProvider } from './contexts/AuthContext'
 import { Account } from './pages/Account'
 import { AgentsPage } from './pages/admin/AgentsPage'
+import { RatesPage } from './pages/admin/RatesPage'
 import { ZonesPage } from './pages/admin/ZonesPage'
 import { OperationsPage } from './pages/agent/OperationsPage'
 import { Home } from './pages/Home'
@@ -38,6 +39,14 @@ function App() {
             element={
               <ProtectedRoute roles={['ADMIN']}>
                 <ZonesPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/rates"
+            element={
+              <ProtectedRoute roles={['ADMIN']}>
+                <RatesPage />
               </ProtectedRoute>
             }
           />

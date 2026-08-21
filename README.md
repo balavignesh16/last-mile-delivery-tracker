@@ -10,15 +10,17 @@ with a React + TypeScript frontend, structured as a modular monolith.
 
 ## Current Status
 
-**M04 — Zone Management.** The backend now also has `zones` and `areas`
-tables, admin-only zone/area CRUD, and a deterministic
-address→area→zone resolution service with INTRA/INTER-zone
-classification. `delivery_agents.current_zone_id`'s foreign key
-(deliberately deferred in M03) is now complete. The frontend has an
-admin zone/area management screen. **No other business functionality
-exists yet** — no rates, no orders, no assignment algorithm, no
-tracking. Those arrive in M05 through M12, in order, each expanding this
-README and `docs/` as they land.
+**M05 — Rate Configuration.** The backend now also has `rate_cards` and
+`rate_card_slabs` tables, admin-only CRUD for both (including slab
+deletion), and enforced invariants — at most one active card per
+`(order_type, zone_relationship)` combination, no overlapping slabs, at
+most one open-ended slab per card — verified under real concurrent
+requests against PostgreSQL, not just sequential tests. The frontend has
+an admin rate-card management screen. **This module only stores
+configuration; nothing calculates a price yet** — no chargeable-weight
+calculation, no slab selection, no COD application, no orders, no
+assignment algorithm, no tracking. Those arrive in M06 through M12, in
+order, each expanding this README and `docs/` as they land.
 
 | Module | Status |
 |---|---|
@@ -26,7 +28,7 @@ README and `docs/` as they land.
 | M02 — Authentication & RBAC | ✅ Done |
 | M03 — User & Agent Management | ✅ Done |
 | M04 — Zone Management | ✅ Done |
-| M05 — Rate Configuration | Not started |
+| M05 — Rate Configuration | ✅ Done |
 | M06 — Rate Calculation Engine | Not started |
 | M07 — Order Management | Not started |
 | M08 — Tracking & Order Lifecycle | Not started |
@@ -288,6 +290,49 @@ are in [`docs/api.md`](docs/api.md). Short version:
   `zones.id` — the constraint M03's own migration comment said would
   land in M04.
 
+## Rate Cards
+
+Full design detail (schema, why cards start inactive, flat-per-band
+pricing, the `[min, max)` boundary convention, why slabs can be deleted
+but cards can't, concurrency mechanisms) is in
+[`docs/rate-configuration.md`](docs/rate-configuration.md); endpoint
+examples are in [`docs/api.md`](docs/api.md). Short version:
+
+- **`POST /api/v1/rates`**, **`GET /api/v1/rates`**, **`GET
+  /api/v1/rates/{id}`**, **`PUT /api/v1/rates/{id}`** (all ADMIN only) —
+  rate card CRUD. New cards always start `active: false`; `PUT` is the
+  only way to activate one (and the only way to deactivate one — there
+  is no `DELETE /rates/{id}`, deliberately, mirroring M04's zones).
+- **`POST /api/v1/rates/{rateCardID}/slabs`**, **`GET
+  /api/v1/rates/{rateCardID}/slabs`**, **`PUT
+  /api/v1/rates/{rateCardID}/slabs/{slabID}`**, **`DELETE
+  /api/v1/rates/{rateCardID}/slabs/{slabID}`** (all ADMIN only) — slabs
+  are always created and addressed under their rate card's URL; the
+  request body has no `rate_card_id` field. Unlike every other config
+  entity in this project, slabs **can** be deleted — nothing else
+  references an individual slab by foreign key, so removing a
+  misconfigured one can't orphan anything.
+- **Pricing model**: each slab is a flat price for its whole
+  `[min_weight, max_weight)` band, not a per-kg rate. `max_weight = null`
+  means open-ended ("and above"); at most one such slab is allowed per
+  card.
+- **One active card per combination**: enforced by a partial unique
+  index (`(order_type, zone_relationship) WHERE active`), not just
+  application code — this is what makes M06's future "select the rate
+  card" step deterministic.
+- **Concurrency, proven under real load, not just asserted**: activating
+  two cards for the same combination at once is resolved by the unique
+  index itself (`TestConcurrentActivation_OnlyOneWins` fires simultaneous
+  requests and checks exactly one wins); concurrent slab creation under
+  one rate card is serialized by a `SELECT ... FOR UPDATE` lock on the
+  parent card (`TestConcurrentSlabCreation_OverlapPreventedUnderRace`),
+  closing a check-then-insert race a plain read-then-write would leave
+  open. Both tests run against real PostgreSQL with actual concurrent
+  goroutines, not sequential calls.
+- **Out of scope, by design**: chargeable-weight calculation, slab
+  selection for a given weight, COD surcharge application, and any quote
+  endpoint — all M06.
+
 ## Repository Structure
 
 ```text
@@ -310,14 +355,15 @@ last-mile-delivery-tracker/
 │   │   ├── users/                # User domain model + Postgres repository, incl. Update (M02, M03)
 │   │   ├── agents/               # delivery_agents domain, repository (transactional creation), handlers, routes (M03)
 │   │   ├── zones/                # zones/areas domain, repository, resolution service, handlers, routes (M04)
-│   │   ├── rates/                # M05/M06 — reserved, empty
+│   │   ├── rates/                # rate_cards/rate_card_slabs domain, concurrency-safe repository, handlers, routes (M05); M06 extends this package
 │   │   ├── orders/                # M07 — reserved, empty
 │   │   ├── tracking/              # M08 — reserved, empty
 │   │   ├── assignment/            # M09 — reserved, empty
 │   │   ├── rescheduling/          # M10 — reserved, empty
 │   │   └── notifications/         # M11 — reserved, empty
 │   ├── migrations/                # embedded SQL migrations (go:embed): 0001 users (M02), 0002 delivery_agents (M03),
-│   │                               #   0003 zones, 0004 areas, 0005 delivery_agents.current_zone_id FK (M04)
+│   │                               #   0003 zones, 0004 areas, 0005 delivery_agents.current_zone_id FK (M04),
+│   │                               #   0006 rate_cards, 0007 rate_card_slabs (M05)
 │   └── tests/
 │       ├── unit/                  # convention note — unit tests are co-located with source
 │       ├── integration/           # DB-backed integration tests (build tag: integration)
@@ -329,11 +375,11 @@ last-mile-delivery-tracker/
 │   └── src/
 │       ├── components/            # Layout (role-aware nav), StatusBadge, ErrorBanner, ProtectedRoute (+roles)
 │       ├── pages/                 # Home, LoginPage, RegisterPage, Account (profile edit);
-│       │                          #   admin/AgentsPage, agent/OperationsPage (M03); admin/ZonesPage (M04)
-│       ├── services/              # api.ts (+apiPut), health.ts, auth.ts (+updateProfile), agents.ts (M03), zones.ts (M04)
+│       │                          #   admin/AgentsPage, agent/OperationsPage (M03); admin/ZonesPage (M04); admin/RatesPage (M05)
+│       ├── services/              # api.ts (+apiPut, +apiDelete), health.ts, auth.ts (+updateProfile), agents.ts (M03), zones.ts (M04), rates.ts (M05)
 │       ├── hooks/                 # useHealthCheck, useAuth
 │       ├── contexts/              # AuthContext.tsx (provider) + auth-context.ts (context object)
-│       ├── types/                 # HealthResponse, auth.ts (+ProfileUpdateInput), agent.ts (M03), zone.ts (M04)
+│       ├── types/                 # HealthResponse, auth.ts (+ProfileUpdateInput), agent.ts (M03), zone.ts (M04), rate.ts (M05)
 │       ├── test/                  # setup.ts — React Testing Library cleanup
 │       └── utils/                 # reserved — no shared utility yet
 │
@@ -341,7 +387,8 @@ last-mile-delivery-tracker/
 │   ├── api.md                     # full endpoint reference, every route so far
 │   ├── authentication.md          # roles, schema, JWT, RBAC, token-storage tradeoff (M02)
 │   ├── user-agent-management.md   # delivery_agents schema, IDOR protection, M09 notes (M03)
-│   └── zone-management.md         # zones/areas schema, resolution, INTRA/INTER, current_zone_id FK (M04)
+│   ├── zone-management.md         # zones/areas schema, resolution, INTRA/INTER, current_zone_id FK (M04)
+│   └── rate-configuration.md      # rate_cards/rate_card_slabs schema, boundaries, concurrency (M05)
 │
 └── scripts/
     └── seed/                      # reserved for later modules' larger seed data (M02's demo users seed from main.go instead — see its README)
@@ -355,8 +402,9 @@ structure live in `docs/architecture.md` once enough modules exist to make
 that worth writing — for now, each module's own doc
 ([`docs/authentication.md`](docs/authentication.md),
 [`docs/user-agent-management.md`](docs/user-agent-management.md),
-[`docs/zone-management.md`](docs/zone-management.md)) covers its own
-design, and [`docs/api.md`](docs/api.md) is the running endpoint
+[`docs/zone-management.md`](docs/zone-management.md),
+[`docs/rate-configuration.md`](docs/rate-configuration.md)) covers its
+own design, and [`docs/api.md`](docs/api.md) is the running endpoint
 reference across all of them.
 
 Two source-document points worth recording now, since they affect the
@@ -402,3 +450,9 @@ Grows with each module.
 | Inactive-zone resolution explicitly rejected (not silently allowed) | `backend/internal/zones/resolution.go` (`ErrZoneInactive`) | `TestResolveArea_InactiveZoneIsRejected` | `docs/zone-management.md` |
 | `delivery_agents.current_zone_id` foreign key completed | `backend/migrations/0005_add_zone_fk_to_delivery_agents.sql` | `TestDeliveryAgentsCurrentZoneFK` | `docs/zone-management.md` |
 | Frontend admin zone/area management, loading/empty/error states | `frontend/src/pages/admin/ZonesPage.tsx` | `ZonesPage.test.tsx`, `services/zones.test.ts` | `docs/zone-management.md` |
+| `rate_cards`/`rate_card_slabs` tables: enum/amount CHECKs, FK, one-active-per-combination + one-open-ended-per-card partial unique indexes | `backend/migrations/0006_create_rate_cards_table.sql`, `0007_create_rate_card_slabs_table.sql` | `TestRateCardsTable_*`, `TestRateCardSlabsTable_*` | `docs/rate-configuration.md` |
+| Admin-only rate card/slab CRUD incl. slab DELETE, path-ownership enforced | `backend/internal/rates/handler.go`, `routes.go` | `TestSlabEndpoints_RoleGating`, `TestUpdateSlab_WrongRateCardInPathRejected`, `TestDeleteSlab_WrongRateCardInPathRejected` | `docs/rate-configuration.md` |
+| `[min, max)` slab semantics, overlap rejection, at most one open-ended slab | `backend/internal/rates/slab_validation.go` | `TestSlabRangesOverlap`, `TestValidateSlabAgainstExisting_*` (incl. exact-boundary and demo-config cases) | `docs/rate-configuration.md` |
+| One active rate card per (order_type, zone_relationship), race-safe | `backend/internal/rates/repository.go` (`UpdateRateCard`) | `TestConcurrentActivation_OnlyOneWins` (real concurrent requests vs. real Postgres) | `docs/rate-configuration.md` |
+| Concurrent slab writes serialized, race-safe | `backend/internal/rates/repository.go` (`lockRateCard`, `CreateSlab`/`UpdateSlab`) | `TestConcurrentSlabCreation_OverlapPreventedUnderRace` | `docs/rate-configuration.md` |
+| Frontend admin rate card/slab management, loading/empty/error states | `frontend/src/pages/admin/RatesPage.tsx` | `RatesPage.test.tsx`, `services/rates.test.ts` | `docs/rate-configuration.md` |

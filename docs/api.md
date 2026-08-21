@@ -279,6 +279,89 @@ curl -X POST http://localhost:8080/api/v1/zones/$ZONE_ID/areas \
 
 ---
 
+## Rate cards and slabs (M05)
+
+Admin-configured pricing profiles, one per `(order_type,
+zone_relationship)` combination, plus their weight-tiered slabs. Every
+endpoint below is **ADMIN only**, including `GET` — see
+`docs/rate-configuration.md` for the full design (schema, `[min, max)`
+boundary convention, concurrency, why cards can't be deleted but slabs
+can). **These endpoints only store configuration — no calculation
+happens here.** Selecting a slab for a chargeable weight, applying COD
+surcharge, and producing a quote are all M06.
+
+### `POST /api/v1/rates`
+
+**Auth**: required, **ADMIN only**. **Purpose**: create a rate card. New cards always start `"active": false` — there is no `active` field on this request at all; activate one via `PUT` once it's ready.
+
+```bash
+curl -X POST http://localhost:8080/api/v1/rates \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"order_type":"B2B","zone_relationship":"INTRA","cod_surcharge":15}'
+```
+
+```json
+{ "id": "4f1a...", "order_type": "B2B", "zone_relationship": "INTRA", "cod_surcharge": 15, "active": false, "created_at": "2026-08-21T10:00:00Z" }
+```
+
+**Errors**: `401`, `403`, `422` (invalid `order_type`/`zone_relationship`, negative `cod_surcharge`, or an unrecognized field like `active`).
+
+### `GET /api/v1/rates`
+
+**Auth**: required, **ADMIN only**. **Purpose**: list every rate card, active or not.
+
+### `GET /api/v1/rates/{id}`
+
+**Auth**: required, **ADMIN only**. **Errors**: `404` if unknown.
+
+### `PUT /api/v1/rates/{id}`
+
+**Auth**: required, **ADMIN only**. **Purpose**: update `cod_surcharge` and/or toggle `active` — this is also how a card is activated/deactivated; there is no separate endpoint. `order_type`/`zone_relationship` are not editable (a card's identity). `cod_surcharge` is always resent (send the current value back if only toggling `active`); `active` is optional — omitting it leaves the current value unchanged.
+
+```bash
+curl -X PUT http://localhost:8080/api/v1/rates/$RATE_CARD_ID \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"cod_surcharge":15,"active":true}'
+```
+
+**Errors**: `401`, `403`, `404`, `409` (activating this card would leave two active cards for the same `order_type`+`zone_relationship`), `422`.
+
+### `POST /api/v1/rates/{rateCardID}/slabs`
+
+**Auth**: required, **ADMIN only**. **Purpose**: create a weight slab under the rate card named in the URL. The request body has no `rate_card_id` field — sending one is rejected outright (422, unknown field), the same fail-closed pattern as area creation having no `zone_id` field. Omit `max_weight` for an open-ended top slab (at most one per card).
+
+```bash
+curl -X POST http://localhost:8080/api/v1/rates/$RATE_CARD_ID/slabs \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"min_weight":0,"max_weight":5,"price":50}'
+```
+
+```json
+{ "id": "9c3e...", "rate_card_id": "4f1a...", "min_weight": 0, "max_weight": 5, "price": 50, "created_at": "2026-08-21T10:05:00Z" }
+```
+
+A chargeable weight in `[min_weight, max_weight)` costs exactly `price` — a flat amount, never multiplied by weight.
+
+**Errors**: `401`, `403`, `404` (unknown rate card), `409` (overlaps an existing slab in this card, or would be a second open-ended slab), `422` (missing/negative `min_weight`/`price`, or `max_weight` not greater than `min_weight`).
+
+### `GET /api/v1/rates/{rateCardID}/slabs`
+
+**Auth**: required, **ADMIN only**. **Purpose**: list the slabs belonging to one rate card. `404` if the rate card itself doesn't exist (distinct from `200` with an empty array).
+
+### `PUT /api/v1/rates/{rateCardID}/slabs/{slabID}`
+
+**Auth**: required, **ADMIN only**. **Purpose**: update a slab's `min_weight`/`max_weight`/`price`. If `{slabID}` exists but belongs to a different rate card than `{rateCardID}` names, the response is `404` — treated identically to "doesn't exist."
+
+**Errors**: `401`, `403`, `404`, `409` (overlap/open-ended conflict), `422`.
+
+### `DELETE /api/v1/rates/{rateCardID}/slabs/{slabID}`
+
+**Auth**: required, **ADMIN only**. **Purpose**: remove a slab. Unlike zones/areas/rate cards, slabs may be deleted outright — nothing else in the schema references an individual slab, so removing a misconfigured one can't orphan anything (see `docs/rate-configuration.md`). Same path-ownership check as `PUT`: wrong `{rateCardID}` → `404`. Returns `204 No Content` on success.
+
+**Errors**: `401`, `403`, `404`.
+
+---
+
 ## What's not here yet
 
-Rate cards, orders, tracking, assignment, rescheduling, notifications, and dashboards — M05 through M12. This file grows with each module.
+Orders, tracking, assignment, rescheduling, notifications, and dashboards — M06 through M12. This file grows with each module.
