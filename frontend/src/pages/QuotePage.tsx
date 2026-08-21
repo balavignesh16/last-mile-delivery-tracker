@@ -1,4 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
+import { Link } from 'react-router-dom'
+import { AreaPicker } from '../components/AreaPicker'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { Layout } from '../components/Layout'
 import { useAuth } from '../hooks/useAuth'
@@ -8,83 +10,10 @@ import { listAreas, listZones } from '../services/zones'
 import type { OrderType } from '../types/rate'
 import type { PaymentType, QuoteResult } from '../types/quote'
 import type { Area, Zone } from '../types/zone'
+import { formatCurrency } from '../utils/currency'
 
 const ORDER_TYPES: OrderType[] = ['B2B', 'B2C']
 const PAYMENT_TYPES: PaymentType[] = ['PREPAID', 'COD']
-
-// A pickup/drop area picker: pick a zone, then an area within it. There
-// is no free-text address field — M04 never offered geocoding, so an
-// area (an admin-configured, resolvable unit) is the smallest thing a
-// customer can select. See docs/zone-management.md's "Address
-// resolution" section.
-function AreaPicker({
-  idPrefix,
-  label,
-  zones,
-  zoneId,
-  onZoneChange,
-  areas,
-  areasLoading,
-  areaId,
-  onAreaChange,
-}: {
-  idPrefix: string
-  label: string
-  zones: Zone[]
-  zoneId: string
-  onZoneChange: (zoneId: string) => void
-  areas: Area[]
-  areasLoading: boolean
-  areaId: string
-  onAreaChange: (areaId: string) => void
-}) {
-  return (
-    <fieldset className="grid gap-3 sm:grid-cols-2">
-      <legend className="mb-1 text-sm font-semibold text-slate-700">{label}</legend>
-      <div>
-        <label htmlFor={`${idPrefix}_zone`} className="block text-xs font-medium text-slate-700">
-          Zone
-        </label>
-        <select
-          id={`${idPrefix}_zone`}
-          value={zoneId}
-          onChange={(e) => onZoneChange(e.target.value)}
-          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-        >
-          <option value="">Select a zone…</option>
-          {zones.map((z) => (
-            <option key={z.id} value={z.id} disabled={!z.active}>
-              {z.name} {z.active ? '' : '(inactive)'}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div>
-        <label htmlFor={`${idPrefix}_area`} className="block text-xs font-medium text-slate-700">
-          Area
-        </label>
-        <select
-          id={`${idPrefix}_area`}
-          value={areaId}
-          onChange={(e) => onAreaChange(e.target.value)}
-          disabled={!zoneId || areasLoading}
-          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-50"
-        >
-          <option value="">{areasLoading ? 'Loading…' : 'Select an area…'}</option>
-          {areas.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name}
-            </option>
-          ))}
-        </select>
-      </div>
-    </fieldset>
-  )
-}
-
-function formatCurrency(amount: number): string {
-  return `₹${amount.toFixed(2)}`
-}
 
 // The M06 quote flow: pick pickup/drop areas, enter package details,
 // request a quote, see the full breakdown. This page never creates or
@@ -402,7 +331,11 @@ export function QuotePage() {
             </div>
           </dl>
           <p className="mt-4 text-xs text-slate-500">
-            This is a preview only — nothing has been booked. Placing an order is coming in a later update.
+            This is a preview only — nothing has been booked yet.{' '}
+            <Link to="/orders/new" className="font-medium text-slate-900 underline">
+              Continue to place an order
+            </Link>{' '}
+            (the order form recalculates this quote itself — nothing shown here is reused as-is).
           </p>
         </div>
       )}

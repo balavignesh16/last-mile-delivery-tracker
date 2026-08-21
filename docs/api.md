@@ -407,6 +407,72 @@ stated explicitly in the source documents (flagged, not invented, in
 
 ---
 
+## Orders (M07)
+
+Order persistence and retrieval. Pricing is never computed here — every
+request below calls M06's `rates.CalculateQuote` internally and stores
+its result as an immutable snapshot; see `docs/order-management.md` for
+the full design (customer-vs-admin creation, ownership, why there's no
+`packages` table, why `orders.rate_card_id` is safe but `slab_id` isn't).
+
+### `POST /api/v1/orders`
+
+**Auth**: required, **ADMIN or CUSTOMER** (`DELIVERY_AGENT` → `403`). **Purpose**: create and price an order. The accepted request shape depends on the caller's role:
+
+- **CUSTOMER** — `pickup_area_id`, `drop_area_id`, `order_type`, `payment_type`, `length_cm`, `breadth_cm`, `height_cm`, `actual_weight_kg`. No `customer_id` field exists on this shape at all; the order's owner is always the caller's own JWT identity. Sending `customer_id` anyway is rejected (`422`, unknown field) — this is the mechanism that makes "a customer cannot create an order for another customer" true.
+- **ADMIN** — the same fields, plus a required `customer_id` naming who the order is for. The id must reference an existing user whose role is `CUSTOMER`; naming an `ADMIN` or `DELIVERY_AGENT` account is rejected.
+
+```bash
+# As a customer
+curl -X POST http://localhost:8080/api/v1/orders \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"pickup_area_id":"...","drop_area_id":"...","order_type":"B2C","payment_type":"COD","length_cm":10,"breadth_cm":10,"height_cm":10,"actual_weight_kg":3}'
+
+# As an admin, on behalf of a customer
+curl -X POST http://localhost:8080/api/v1/orders \
+  -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"customer_id":"...","pickup_area_id":"...","drop_area_id":"...","order_type":"B2C","payment_type":"PREPAID","length_cm":1,"breadth_cm":1,"height_cm":1,"actual_weight_kg":8}'
+```
+
+```json
+{
+  "id": "...", "customer_id": "...", "created_by": "...",
+  "order_type": "B2C", "payment_type": "COD",
+  "pickup_area_id": "...", "drop_area_id": "...",
+  "pickup_zone_id": "...", "drop_zone_id": "...", "zone_relationship": "INTRA",
+  "length_cm": 10, "breadth_cm": 10, "height_cm": 10, "actual_weight_kg": 3,
+  "volumetric_weight_kg": 0.2, "chargeable_weight_kg": 3,
+  "rate_card_id": "...", "base_rate": 55, "cod_surcharge": 18, "final_amount": 73,
+  "status": "CREATED", "created_at": "2026-08-21T09:21:32Z"
+}
+```
+
+The request body has no field for anything server-derived — `id`,
+`created_by`, `pickup_zone_id`, `drop_zone_id`, `zone_relationship`,
+`volumetric_weight_kg`, `chargeable_weight_kg`, `rate_card_id`,
+`base_rate`, `cod_surcharge`, `final_amount`, `status`, `created_at` —
+sending any of them is rejected outright (`422`, unknown field).
+
+**Errors**: `401`, `403`, `422` for: malformed body, an unknown field, a `CUSTOMER` sending `customer_id`, a missing `customer_id` from an `ADMIN`, a `customer_id` that doesn't exist or isn't a `CUSTOMER`, invalid `order_type`/`payment_type`, non-positive/non-finite dimensions or weight, an unknown or inactive-zone pickup/drop area, no active rate card for the resolved combination, or no slab covering the calculated chargeable weight (the same pricing-failure modes `POST /orders/quote` has, since both call the identical `CalculateQuote`).
+
+### `GET /api/v1/orders`
+
+**Auth**: required, **ADMIN or CUSTOMER**. **Purpose**: list orders — every order for `ADMIN`, only the caller's own for `CUSTOMER`. No query-parameter filters (by status, zone, or agent) — nothing in this milestone produces fields worth filtering on yet; every order is `CREATED` and none has an assigned agent until M08/M09 land.
+
+```bash
+curl http://localhost:8080/api/v1/orders -H "Authorization: Bearer $TOKEN"
+```
+
+Response: a JSON array of the same shape `POST /orders` returns.
+
+### `GET /api/v1/orders/{id}`
+
+**Auth**: required, **ADMIN or CUSTOMER**. **Purpose**: retrieve one order. `ADMIN` may retrieve any order; `CUSTOMER` only their own — requesting another customer's order id returns `404`, never `403` or any other signal that the order exists, the same ownership convention M04's area-vs-zone and M05's slab-vs-rate-card path checks use.
+
+**Errors**: `401`, `403` (`DELIVERY_AGENT`), `404` (unknown id, or a `CUSTOMER` requesting an order they don't own).
+
+---
+
 ## What's not here yet
 
-Order creation/persistence/retrieval, tracking, assignment, rescheduling, notifications, and dashboards — M07 through M12. This file grows with each module.
+Order status transitions, tracking, agent assignment, rescheduling, notifications, and dashboards — M08 through M12. This file grows with each module.

@@ -31,8 +31,14 @@ Written so far:
   volumetric/chargeable weight, the `[min, max)` slab-selection
   algorithm, COD surcharge application, why nothing is persisted, the
   narrow customer-facing zone/area read-RBAC widening it required, and
-  why `POST /orders/quote` is the one authoritative pricing path a later
-  order-confirmation step is expected to reuse (M06).
+  why `POST /orders/quote` is the one authoritative pricing path M07's
+  order creation reuses (M06).
+- [`order-management.md`](./order-management.md) — the orders schema,
+  why there's no `packages` table, customer-vs-admin creation and
+  ownership, the pricing snapshot (and why `rate_card_id` is safe on
+  orders but `slab_id` isn't), why every order starts and only M07 ever
+  writes `CREATED`, and exactly how order creation reuses M06's
+  `rates.CalculateQuote` without a second pricing implementation (M07).
 
 The rest don't exist yet — the root [README.md](../README.md) carries each
 completed module's summary directly, and links into this directory as

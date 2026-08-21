@@ -30,31 +30,36 @@ type quoteRequest struct {
 	ActualWeightKG *float64 `json:"actual_weight_kg"`
 }
 
-// validateQuoteRequest turns a decoded quoteRequest into a QuoteInput,
-// or returns a client-safe validation message. Dimensions and actual
-// weight are pointers so "omitted" (rejected) stays distinguishable from
-// "explicitly zero" (also rejected, but with a different, more precise
-// reason) — the same *float64 idiom createSlabRequest uses.
-func validateQuoteRequest(req quoteRequest) (QuoteInput, string) {
-	if req.PickupAreaID == "" || req.DropAreaID == "" {
+// ValidateQuoteFields validates the exact set of client-suppliable quote
+// inputs and returns a ready-to-use QuoteInput, or a client-safe
+// validation message. Exported so both this package's own QuoteHandler
+// and internal/orders' order-creation handler validate with identical
+// rules — order creation must reject a nonsensical package the same way
+// a quote request would, without a second, drifting copy of these
+// checks. Dimensions and actual weight are pointers so "omitted"
+// (rejected) stays distinguishable from "explicitly zero" (also
+// rejected, but with a different, more precise reason) — the same
+// *float64 idiom createSlabRequest uses.
+func ValidateQuoteFields(pickupAreaID, dropAreaID, orderTypeRaw, paymentTypeRaw string, lengthCM, breadthCM, heightCM, actualWeightKG *float64) (QuoteInput, string) {
+	if pickupAreaID == "" || dropAreaID == "" {
 		return QuoteInput{}, "pickup_area_id and drop_area_id are required"
 	}
 
-	orderType, ok := ParseOrderType(req.OrderType)
+	orderType, ok := ParseOrderType(orderTypeRaw)
 	if !ok {
 		return QuoteInput{}, "order_type must be one of B2B, B2C"
 	}
 
-	paymentType, ok := ParsePaymentType(req.PaymentType)
+	paymentType, ok := ParsePaymentType(paymentTypeRaw)
 	if !ok {
 		return QuoteInput{}, "payment_type must be one of PREPAID, COD"
 	}
 
-	if req.LengthCM == nil || req.BreadthCM == nil || req.HeightCM == nil || req.ActualWeightKG == nil {
+	if lengthCM == nil || breadthCM == nil || heightCM == nil || actualWeightKG == nil {
 		return QuoteInput{}, "length_cm, breadth_cm, height_cm, and actual_weight_kg are all required"
 	}
 
-	dims := [4]float64{*req.LengthCM, *req.BreadthCM, *req.HeightCM, *req.ActualWeightKG}
+	dims := [4]float64{*lengthCM, *breadthCM, *heightCM, *actualWeightKG}
 	for _, v := range dims {
 		if math.IsNaN(v) || math.IsInf(v, 0) {
 			return QuoteInput{}, "length_cm, breadth_cm, height_cm, and actual_weight_kg must be finite numbers"
@@ -65,14 +70,14 @@ func validateQuoteRequest(req quoteRequest) (QuoteInput, string) {
 	}
 
 	return QuoteInput{
-		PickupAreaID:   req.PickupAreaID,
-		DropAreaID:     req.DropAreaID,
+		PickupAreaID:   pickupAreaID,
+		DropAreaID:     dropAreaID,
 		OrderType:      orderType,
 		PaymentType:    paymentType,
-		LengthCM:       *req.LengthCM,
-		BreadthCM:      *req.BreadthCM,
-		HeightCM:       *req.HeightCM,
-		ActualWeightKG: *req.ActualWeightKG,
+		LengthCM:       *lengthCM,
+		BreadthCM:      *breadthCM,
+		HeightCM:       *heightCM,
+		ActualWeightKG: *actualWeightKG,
 	}, ""
 }
 
@@ -144,7 +149,7 @@ func QuoteHandler(zonesRepo zones.Repository, ratesRepo Repository) http.Handler
 			return
 		}
 
-		input, problem := validateQuoteRequest(req)
+		input, problem := ValidateQuoteFields(req.PickupAreaID, req.DropAreaID, req.OrderType, req.PaymentType, req.LengthCM, req.BreadthCM, req.HeightCM, req.ActualWeightKG)
 		if problem != "" {
 			server.WriteError(w, http.StatusUnprocessableEntity, problem)
 			return
@@ -152,7 +157,7 @@ func QuoteHandler(zonesRepo zones.Repository, ratesRepo Repository) http.Handler
 
 		result, err := CalculateQuote(r.Context(), zonesRepo, ratesRepo, input)
 		if err != nil {
-			if status, message, ok := mapQuoteDomainError(err); ok {
+			if status, message, ok := MapQuoteError(err); ok {
 				server.WriteError(w, status, message)
 				return
 			}
@@ -165,15 +170,17 @@ func QuoteHandler(zonesRepo zones.Repository, ratesRepo Repository) http.Handler
 	}
 }
 
-// mapQuoteDomainError translates CalculateQuote's domain errors into
-// (status, message) pairs. Every one of these is treated as 422: the
-// caller's input (an area id, an order type/zone relationship
-// combination with no active rate card, a weight no configured slab
-// covers) is what made the request unserviceable — none of them are "no
-// such URL resource" (404) or "conflicting concurrent write" (409),
-// the two other status codes this API otherwise reserves for path/
-// mutation-specific failures.
-func mapQuoteDomainError(err error) (status int, message string, ok bool) {
+// MapQuoteError translates CalculateQuote's domain errors into (status,
+// message) pairs. Every one of these is treated as 422: the caller's
+// input (an area id, an order type/zone relationship combination with
+// no active rate card, a weight no configured slab covers) is what made
+// the request unserviceable — none of them are "no such URL resource"
+// (404) or "conflicting concurrent write" (409), the two other status
+// codes this API otherwise reserves for path/mutation-specific
+// failures. Exported so internal/orders' order-creation handler maps
+// CalculateQuote's errors identically rather than re-deriving its own
+// status/message pairs for the same errors.
+func MapQuoteError(err error) (status int, message string, ok bool) {
 	switch {
 	case errors.Is(err, zones.ErrAreaNotFound):
 		return http.StatusUnprocessableEntity, "pickup_area_id or drop_area_id does not reference an existing area", true

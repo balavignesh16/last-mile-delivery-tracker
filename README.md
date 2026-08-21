@@ -10,22 +10,25 @@ with a React + TypeScript frontend, structured as a modular monolith.
 
 ## Current Status
 
-**M06 — Rate Calculation Engine.** The backend can now calculate a full
-delivery quote: `POST /api/v1/orders/quote` resolves the pickup/drop
-areas (M04), determines INTRA/INTER, selects the active rate card and
-matching weight slab (M05), and returns volumetric weight, chargeable
-weight, base rate, COD surcharge, and final amount — all computed fresh
-on every call, never trusting a client-supplied price. Nothing is
-persisted; no order exists after calling this endpoint. `CUSTOMER` can
-now also read `GET /zones`, `GET /zones/{id}`, and `GET
-/zones/{zoneID}/areas` (previously admin-only) so they can pick a
-pickup/drop area — the one narrow M04 change this module required. The
-frontend has a quote form (pickup/drop area pickers, package details,
-full breakdown display) for both `CUSTOMER` and `ADMIN`. **Order
-creation, persistence, retrieval, and ownership are explicitly out of
-scope here** — those, along with assignment and tracking, arrive in M07
-through M12, in order, each expanding this README and `docs/` as they
-land.
+**M07 — Order Management.** Orders can now be created, listed, and
+retrieved. `POST /api/v1/orders` builds a `rates.QuoteInput` from the
+request and calls M06's `rates.CalculateQuote` directly — the exact same
+function `POST /orders/quote` calls — then persists the returned
+`QuoteResult` as an immutable pricing snapshot; no pricing logic is
+duplicated anywhere in this module. A `CUSTOMER` can only create/view
+their own orders (identity always comes from the JWT, never the request
+body); an `ADMIN` can create an order on behalf of any real `CUSTOMER`
+account (validated by id and role before being trusted) and can
+retrieve any order. `GET /orders/{id}` returns `404`, never `403`, for
+an order a `CUSTOMER` doesn't own. Every order starts `status =
+'CREATED'` — this module writes nothing else; status transitions are
+M08's job. The frontend has a create-order flow (preview a quote, then
+confirm — confirming is a second, independent call that recomputes
+pricing server-side), an order list, and an order detail page, for both
+`CUSTOMER` and `ADMIN`. **Status transitions, agent assignment,
+tracking, and notifications are explicitly out of scope here** — those
+arrive in M08 through M12, in order, each expanding this README and
+`docs/` as they land.
 
 | Module | Status |
 |---|---|
@@ -35,7 +38,7 @@ land.
 | M04 — Zone Management | ✅ Done |
 | M05 — Rate Configuration | ✅ Done |
 | M06 — Rate Calculation Engine | ✅ Done |
-| M07 — Order Management | Not started |
+| M07 — Order Management | ✅ Done |
 | M08 — Tracking & Order Lifecycle | Not started |
 | M09 — Assignment Engine | Not started |
 | M10 — Failed Delivery & Rescheduling | Not started |
@@ -287,7 +290,7 @@ are in [`docs/api.md`](docs/api.md). Short version:
   pickup/drop area pair to their zones and classifies the pair as
   `INTRA` (same zone) or `INTER` (different zones) — comparing zone IDs,
   never names. No HTTP endpoint exposes this in M04; it's a Go-level
-  service M06's rate engine and M07's order flow are expected to call
+  service M06's `CalculateQuote` and M07's order creation both call
   directly. Resolving an unknown area fails explicitly; resolving
   through a deactivated zone fails explicitly too (`ErrZoneInactive`) —
   the resolver never guesses a zone or silently returns `INTRA`.
@@ -364,9 +367,51 @@ reference is in [`docs/api.md`](docs/api.md). Short version:
   /zones/{zoneID}/areas` now also admit `CUSTOMER` (previously
   ADMIN-only), so a customer can pick a real pickup/drop area for a
   quote. No mutation route changed.
-- **Out of scope, by design**: order creation/persistence, customer
-  ownership, order retrieval/listing, order status — all a later module.
-  `internal/orders` remains the reserved, empty placeholder it was in M01.
+- **Order creation (M07) reuses this exact function** — `CalculateQuote`
+  — rather than a second implementation; see below.
+
+## Order Management (M07)
+
+Full design detail (customer-vs-admin creation, ownership, the pricing
+snapshot, why there's no `packages` table, why `rate_card_id` is safe on
+an order but `slab_id` isn't) is in
+[`docs/order-management.md`](docs/order-management.md); endpoint
+reference is in [`docs/api.md`](docs/api.md). Short version:
+
+- **`POST /api/v1/orders`** (ADMIN or CUSTOMER; DELIVERY_AGENT → 403) —
+  builds a `rates.QuoteInput` from the request and calls
+  `rates.CalculateQuote` — M06's exact, unmodified pricing path — then
+  persists the returned `QuoteResult` as an immutable snapshot.
+  `status` is always `CREATED`; no other value is ever written here.
+- **Customer vs. admin request shapes are two different Go structs, not
+  one shared struct with an optional field.** A `CUSTOMER`'s DTO has no
+  `customer_id` field at all — sending one is a `422` unknown-field
+  rejection, which is what makes "a customer cannot create an order for
+  another customer" true by construction. An `ADMIN`'s DTO requires
+  `customer_id`, validated to reference a real user with role
+  `CUSTOMER` (an `ADMIN`/`DELIVERY_AGENT` target is rejected).
+  `created_by` is always the caller's own JWT identity on both paths.
+- **`GET /api/v1/orders`** — every order for `ADMIN`, only the caller's
+  own for `CUSTOMER`. **`GET /api/v1/orders/{id}`** — any order for
+  `ADMIN`; a `CUSTOMER` requesting another customer's order gets `404`,
+  never `403`, the same ownership convention M04/M05 established.
+- **Pricing snapshot, not a live reference**: `base_rate`,
+  `cod_surcharge`, `final_amount`, `zone_relationship`, and the resolved
+  weights are written once from `QuoteResult` and never recomputed — a
+  later edit to the rate card that priced an order never changes that
+  order's stored amount. `rate_card_id` is stored (rate cards are
+  deactivate-only, never deleted); `slab_id` deliberately is not (M05
+  allows slab deletion, and nothing else may reference one by FK).
+- **One new table, no new migration elsewhere**: `orders` (migration
+  `0008`), 20 columns, 7 foreign keys, 8 CHECK constraints matching the
+  full M08 status enum (schema-only — this module writes only
+  `CREATED`). No `packages` table — dimensions are inline columns, so
+  order creation is a single `INSERT` after pricing completes; no
+  transaction needed.
+- **Out of scope, by design**: status transitions (`PUT
+  /orders/{id}/status` does not exist), agent assignment, tracking,
+  order filtering by status/zone/agent, order editing/cancellation —
+  all later modules.
 
 ## Repository Structure
 
@@ -391,32 +436,34 @@ last-mile-delivery-tracker/
 │   │   ├── agents/               # delivery_agents domain, repository (transactional creation), handlers, routes (M03)
 │   │   ├── zones/                # zones/areas domain, repository, resolution service, handlers, routes (M04)
 │   │   ├── rates/                # rate_cards/rate_card_slabs domain, concurrency-safe repository, handlers, routes (M05); pricing.go/quote_handler.go add the M06 calculation engine + POST /orders/quote
-│   │   ├── orders/                # M07 — reserved, empty
+│   │   ├── orders/                # orders domain, repository, handlers, routes (M07) — calls rates.CalculateQuote, never reimplements pricing
 │   │   ├── tracking/              # M08 — reserved, empty
 │   │   ├── assignment/            # M09 — reserved, empty
 │   │   ├── rescheduling/          # M10 — reserved, empty
 │   │   └── notifications/         # M11 — reserved, empty
 │   ├── migrations/                # embedded SQL migrations (go:embed): 0001 users (M02), 0002 delivery_agents (M03),
 │   │                               #   0003 zones, 0004 areas, 0005 delivery_agents.current_zone_id FK (M04),
-│   │                               #   0006 rate_cards, 0007 rate_card_slabs (M05); M06 added none — pure calculation, no new schema
+│   │                               #   0006 rate_cards, 0007 rate_card_slabs (M05); M06 added none — pure calculation, no new schema;
+│   │                               #   0008 orders (M07)
 │   └── tests/
 │       ├── unit/                  # convention note — unit tests are co-located with source
 │       ├── integration/           # DB-backed integration tests (build tag: integration)
-│       └── e2e/                   # reserved — full-stack flow tests start around M06/M07
+│       └── e2e/                   # reserved — full-stack flow tests start around M08/M09
 │
 ├── frontend/
 │   ├── package.json
 │   ├── vite.config.ts
 │   └── src/
-│       ├── components/            # Layout (role-aware nav), StatusBadge, ErrorBanner, ProtectedRoute (+roles)
+│       ├── components/            # Layout (role-aware nav), StatusBadge, ErrorBanner, ProtectedRoute (+roles), AreaPicker (M06, shared with M07)
 │       ├── pages/                 # Home, LoginPage, RegisterPage, Account (profile edit);
-│       │                          #   admin/AgentsPage, agent/OperationsPage (M03); admin/ZonesPage (M04); admin/RatesPage (M05); QuotePage (M06)
-│       ├── services/              # api.ts (+apiPut, +apiDelete), health.ts, auth.ts (+updateProfile), agents.ts (M03), zones.ts (M04), rates.ts (M05), quote.ts (M06)
+│       │                          #   admin/AgentsPage, agent/OperationsPage (M03); admin/ZonesPage (M04); admin/RatesPage (M05); QuotePage (M06);
+│       │                          #   CreateOrderPage, OrdersPage, OrderDetailPage (M07)
+│       ├── services/              # api.ts (+apiPut, +apiDelete), health.ts, auth.ts (+updateProfile), agents.ts (M03), zones.ts (M04), rates.ts (M05), quote.ts (M06), orders.ts (M07)
 │       ├── hooks/                 # useHealthCheck, useAuth
 │       ├── contexts/              # AuthContext.tsx (provider) + auth-context.ts (context object)
-│       ├── types/                 # HealthResponse, auth.ts (+ProfileUpdateInput), agent.ts (M03), zone.ts (M04), rate.ts (M05), quote.ts (M06)
+│       ├── types/                 # HealthResponse, auth.ts (+ProfileUpdateInput), agent.ts (M03), zone.ts (M04), rate.ts (M05), quote.ts (M06), order.ts (M07)
 │       ├── test/                  # setup.ts — React Testing Library cleanup
-│       └── utils/                 # reserved — no shared utility yet
+│       └── utils/                 # currency.ts (formatCurrency, shared M06/M07)
 │
 ├── docs/                          # detailed per-module docs, written as each module lands
 │   ├── api.md                     # full endpoint reference, every route so far
@@ -424,7 +471,8 @@ last-mile-delivery-tracker/
 │   ├── user-agent-management.md   # delivery_agents schema, IDOR protection, M09 notes (M03)
 │   ├── zone-management.md         # zones/areas schema, resolution, INTRA/INTER, current_zone_id FK (M04)
 │   ├── rate-configuration.md      # rate_cards/rate_card_slabs schema, boundaries, concurrency (M05)
-│   └── rate-calculation.md        # quote engine: weight formula, slab selection, COD, RBAC widening (M06)
+│   ├── rate-calculation.md        # quote engine: weight formula, slab selection, COD, RBAC widening (M06)
+│   └── order-management.md        # orders schema, ownership, pricing snapshot, CalculateQuote reuse (M07)
 │
 └── scripts/
     └── seed/                      # reserved for later modules' larger seed data (M02's demo users seed from main.go instead — see its README)

@@ -116,9 +116,15 @@ export function Account() {
       {(user.role === 'ADMIN' || user.role === 'CUSTOMER') && (
         <div className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
           <h2 className="text-sm font-semibold text-slate-700">Deliveries</h2>
-          <p className="mt-1 text-sm text-slate-500">
+          <p className="mt-1 space-x-4 text-sm text-slate-500">
             <Link to="/quote" className="font-medium text-slate-900 underline">
               Get a delivery quote
+            </Link>
+            <Link to="/orders/new" className="font-medium text-slate-900 underline">
+              Place an order
+            </Link>
+            <Link to="/orders" className="font-medium text-slate-900 underline">
+              {user.role === 'ADMIN' ? 'View all orders' : 'View my orders'}
             </Link>
           </p>
         </div>

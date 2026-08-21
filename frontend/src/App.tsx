@@ -6,8 +6,11 @@ import { AgentsPage } from './pages/admin/AgentsPage'
 import { RatesPage } from './pages/admin/RatesPage'
 import { ZonesPage } from './pages/admin/ZonesPage'
 import { OperationsPage } from './pages/agent/OperationsPage'
+import { CreateOrderPage } from './pages/CreateOrderPage'
 import { Home } from './pages/Home'
 import { LoginPage } from './pages/LoginPage'
+import { OrderDetailPage } from './pages/OrderDetailPage'
+import { OrdersPage } from './pages/OrdersPage'
 import { QuotePage } from './pages/QuotePage'
 import { RegisterPage } from './pages/RegisterPage'
 
@@ -64,6 +67,30 @@ function App() {
             element={
               <ProtectedRoute roles={['ADMIN', 'CUSTOMER']}>
                 <QuotePage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/orders"
+            element={
+              <ProtectedRoute roles={['ADMIN', 'CUSTOMER']}>
+                <OrdersPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/orders/new"
+            element={
+              <ProtectedRoute roles={['ADMIN', 'CUSTOMER']}>
+                <CreateOrderPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/orders/:id"
+            element={
+              <ProtectedRoute roles={['ADMIN', 'CUSTOMER']}>
+                <OrderDetailPage />
               </ProtectedRoute>
             }
           />
