@@ -152,6 +152,27 @@ validation is added or changed here; Twilio expects
 [E.164](https://www.twilio.com/docs/glossary/what-e164) format
 (e.g. `+15550100`).
 
+**A second, unrelated limitation for Indian recipients specifically:**
+India's telecom regulator (TRAI) requires any commercial SMS delivered
+to an Indian mobile number to originate from a
+[DLT](https://www.twilio.com/docs/messaging/india-dlt)-registered
+sender ID and message template. This is a national regulatory
+requirement that applies to every SMS provider operating in India, not
+a Twilio-specific restriction or a gap in this implementation —
+verified directly during this project's own manual testing: Twilio
+rejected delivery to a verified Indian number with `21408`
+("permissions disabled for the destination region") until India was
+explicitly enabled in the account's SMS Geo Permissions, and a second
+provider (MSG91, India-focused) was independently confirmed to require
+the identical DLT registration before it would send to the same
+number. DLT registration requires a registered business entity (PAN/
+GST) and is out of scope for a project of this kind. `TwilioSmsProvider`
+was verified end-to-end against the real Twilio API up to exactly this
+point — the request reaches Twilio correctly, authenticates correctly,
+and is rejected by Twilio's own regional policy, not by any defect in
+this code. Delivery to a non-restricted country's number (e.g. a US
+number on Twilio's own trial) is unaffected by this limitation.
+
 Both `ResendEmailProvider` and `TwilioSmsProvider` are pure
 implementation substitutions behind interfaces `Service` already
 depended on — neither required any change to `service.go`'s dispatch,

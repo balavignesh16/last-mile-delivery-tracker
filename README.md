@@ -57,9 +57,12 @@ assignment's own "free-tier service" wording. Addressed:
   defaults to `log`; set it to `twilio` plus `TWILIO_ACCOUNT_SID`/
   `TWILIO_AUTH_TOKEN`/`TWILIO_FROM_NUMBER` to send real texts — same
   fail-fast-at-startup guarantee if those are missing. A Twilio trial
-  account can only text phone numbers verified in the Twilio console —
-  see `docs/notifications.md` for the full, honestly-documented
-  limitation.
+  account can only text phone numbers verified in the Twilio console;
+  delivery to Indian numbers additionally requires DLT registration
+  under Indian telecom regulation (verified directly against the real
+  Twilio API — the request is correctly built and authenticated, and
+  rejected by Twilio's own regional policy, not by this code) — see
+  `docs/notifications.md` for the full, honestly-documented limitation.
 - **A configurable frontend API base URL** (`VITE_API_BASE_URL`,
   `frontend/services/api.ts`) — the one change deployment actually
   required: every request in the frontend already funneled through one
