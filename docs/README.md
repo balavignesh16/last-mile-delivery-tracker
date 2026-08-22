@@ -80,6 +80,10 @@ Written so far:
   zone detection, order lifecycle and immutable tracking,
   auto-assignment, failed delivery/rescheduling/notifications, and
   security/RBAC (M12).
+- [`deployment.md`](./deployment.md) — why CORS and a build-time API
+  base URL are both required once frontend and backend are hosted on
+  different origins, the backend/frontend deployment steps, required
+  environment variables, and how to verify a live deployment.
 
 The rest don't exist yet — the root [README.md](../README.md) carries each
 completed module's summary directly, and links into this directory as

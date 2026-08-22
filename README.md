@@ -10,6 +10,55 @@ with a React + TypeScript frontend, structured as a modular monolith.
 
 ## Current Status
 
+**Post-M12 hardening.** A full audit after M12 (see "Evaluation Matrix"
+below) identified the gap between what M01–M12 build and what the
+assignment's own deliverables require: a hosted application URL, and a
+closer reading of "email notifications are sent" against the
+assignment's own "free-tier service" wording. Addressed:
+
+- **CORS** (`internal/server/cors.go`) — a small, hand-rolled middleware
+  (no new dependency), wrapped around the router only in
+  `cmd/server/main.go`, off by default (`CORS_ALLOWED_ORIGINS` unset =
+  no header added, today's behavior unchanged). Required the moment
+  frontend and backend are hosted on different origins — verified live
+  against a running container, both the allow-path and the deny-path.
+- **Real email, opt-in** — `notifications.ResendEmailProvider`
+  (`internal/notifications/resend.go`) sends real email via
+  [Resend](https://resend.com)'s free tier, behind the exact same
+  `EmailProvider` interface `LogEmailProvider` already satisfies.
+  `EMAIL_PROVIDER` defaults to `log` (zero credentials, zero external
+  calls, unchanged from M11); set it to `resend` plus `RESEND_API_KEY`/
+  `RESEND_FROM_EMAIL` to send real mail — the backend fails fast at
+  startup if those are missing while `resend` is selected. SMS stays
+  log-only (see `docs/notifications.md` for why).
+- **A configurable frontend API base URL** (`VITE_API_BASE_URL`,
+  `frontend/services/api.ts`) — the one change deployment actually
+  required: every request in the frontend already funneled through one
+  function, so this is a few-line, single-file change, not a rework.
+  Empty by default (today's relative-path/dev-proxy behavior,
+  unchanged).
+- **CI** (`.github/workflows/ci.yml`) — backend `gofmt`/`go vet`/
+  `go build`/`go test` (unit, integration, e2e, against a real Postgres
+  service container) and frontend `tsc`/`oxlint`/`vitest`/`vite build`,
+  on every push/PR to `main`.
+- **An automated OpenAPI-contract test**
+  (`TestOpenAPIContract_DocumentedPathsMatchRealRoutes`) — walks the
+  real, fully-mounted router via chi's own route introspection and
+  diffs it against `docs/openapi.yaml`, so the document and the router
+  can never silently drift apart again.
+- **Three supporting indexes** (migration `0013`) on
+  `orders.status`/`pickup_zone_id`/`drop_zone_id` — the two columns
+  `GET /orders`'s M12 filter can now query that didn't already have one
+  (`customer_id` and `assigned_agent_id` already did, from M07/M09).
+- **`docs/deployment.md`** — the concrete deployment guide tying CORS,
+  the base-URL config, and both platforms' required environment
+  variables together, plus how to verify a live deployment.
+
+None of this touched `internal/tracking`, `internal/assignment`,
+`internal/rescheduling`, or `internal/notifications`' own dispatch/
+idempotency logic — see the Evaluation Matrix for the full evidence
+trail.
+
 **M12 — Dashboards & Evaluation Layer.** A role-specific dashboard
 landing page for each of `CUSTOMER` (`/customer/dashboard`),
 `DELIVERY_AGENT` (`/agent/dashboard`), and `ADMIN` (`/admin/dashboard`)
@@ -237,6 +286,11 @@ backend's origin and the backend needs no CORS configuration in
 development.
 
 ## Running Tests
+
+`.github/workflows/ci.yml` runs every command below automatically on
+every push/PR to `main` (backend against a real Postgres service
+container, frontend on Node 24) — see `docs/deployment.md`'s own CI
+section.
 
 **Backend:**
 
@@ -707,9 +761,12 @@ explicitly states M11 adds no REST API. Short version:
   actual backstop against a duplicate send, proven with concurrent
   goroutines against real Postgres.
 - **Provider abstraction**: `EmailProvider`/`SmsProvider`, two narrow
-  interfaces. The only implementations that ship are log-based
-  (`LogEmailProvider`/`LogSmsProvider`) — zero external accounts,
-  credentials, or SDK dependencies, by design for this MVP.
+  interfaces. `LogEmailProvider`/`LogSmsProvider` are the zero-config
+  default; `ResendEmailProvider` (post-M12) sends real email via
+  [Resend](https://resend.com)'s free tier behind the identical
+  interface, opt-in via `EMAIL_PROVIDER=resend` — see "Post-M12
+  hardening" above and `docs/notifications.md`. SMS stays log-only
+  either way.
 - **Failure containment**: a provider error is caught, logged, and
   recorded as that one notification's `FAILED` status; a panicking
   provider is recovered. Neither can ever roll back or fail the
@@ -769,9 +826,12 @@ Short version:
   never hardcoded, never a new aggregation endpoint.
 - **OpenAPI & system design**: `docs/openapi.yaml` is a static,
   hand-authored OpenAPI 3.0 document (no runtime reflection/Swagger-UI
-  dependency added) mirroring every real route; `docs/system-design.md`
-  is the required ≤ 800-word write-up covering the rate engine, zone
-  detection, auto-assignment, and failed-delivery handling.
+  dependency added) mirroring every real route — kept honest by
+  `TestOpenAPIContract_DocumentedPathsMatchRealRoutes` (post-M12), which
+  walks the real router via chi's own route introspection and diffs it
+  against the document on every CI run. `docs/system-design.md` is the
+  required ≤ 800-word write-up covering the rate engine, zone detection,
+  auto-assignment, and failed-delivery handling.
 - **E2E tests**: `backend/tests/e2e/` — empty since M01 — now has real,
   full-stack HTTP flow tests exercising the entire real router
   end-to-end: register → quote → order → assign → agent-driven status
@@ -785,6 +845,19 @@ Short version:
   KPIs beyond simple status counts, a new dashboard backend module or
   database table, and any new frontend dependency.
 
+## Deployment
+
+Full guide — why CORS and a build-time API base URL are both required,
+required environment variables per platform, and how to verify a live
+deployment — is in [`docs/deployment.md`](docs/deployment.md). Short
+version: the backend's existing `Dockerfile` deploys as-is to
+Render/Railway/similar; the frontend deploys to Vercel/similar as a
+static Vite build. Set `CORS_ALLOWED_ORIGINS` on the backend to the
+frontend's real URL, and `VITE_API_BASE_URL` on the frontend to the
+backend's real URL, at build/deploy time — both are unset (and
+harmless) by default, matching today's same-origin local-dev behavior
+exactly.
+
 ## Repository Structure
 
 ```text
@@ -792,17 +865,18 @@ last-mile-delivery-tracker/
 ├── README.md
 ├── LICENSE
 ├── .gitignore
-├── .env.example
+├── .env.example                  # +CORS_ALLOWED_ORIGINS, EMAIL_PROVIDER, RESEND_API_KEY, RESEND_FROM_EMAIL (post-M12)
 ├── docker-compose.yml
+├── .github/workflows/ci.yml      # backend fmt/vet/build/unit/integration/e2e + frontend tsc/lint/test/build, on every push/PR (post-M12)
 │
 ├── backend/
 │   ├── go.mod
 │   ├── Dockerfile
-│   ├── cmd/server/main.go        # entry point: config → DB pool → router → graceful shutdown
+│   ├── cmd/server/main.go        # entry point: config → DB pool → router → graceful shutdown; CORS wrapper + EmailProvider selection (post-M12)
 │   ├── internal/
-│   │   ├── config/               # environment-based configuration (M01, M02: +JWT_SECRET)
+│   │   ├── config/               # environment-based configuration (M01, M02: +JWT_SECRET; post-M12: +CORSAllowedOrigins, NotificationsConfig)
 │   │   ├── database/             # pgx connection pool + migration runner (M01, M02)
-│   │   ├── server/               # router, middleware, /health (M01)
+│   │   ├── server/               # router, middleware, /health (M01); cors.go — hand-rolled CORS middleware, wrapped around the router only in main.go (post-M12)
 │   │   ├── auth/                 # password hashing, JWT, RBAC middleware, register/login/GET+PUT me handlers, demo seed (M02, M03)
 │   │   ├── users/                # User domain model + Postgres repository, incl. Update (M02, M03)
 │   │   ├── agents/               # delivery_agents domain, repository (transactional creation), handlers, routes (M03)
@@ -812,22 +886,25 @@ last-mile-delivery-tracker/
 │   │   ├── tracking/              # status state machine, order_tracking_events domain, repository, handlers, routes (M08)
 │   │   ├── assignment/            # candidate ranking, eligibility, repository (reuses tracking.TransitionTx), handlers, routes (M09)
 │   │   ├── rescheduling/          # reschedule domain/validation, repository (reuses tracking.TransitionTx, frees the previous agent), handlers, routes (M10)
-│   │   └── notifications/         # event->content mapping, provider abstraction + log-based MVP providers, claim-then-resolve repository, Service (M11)
+│   │   └── notifications/         # event->content mapping, provider abstraction + log-based MVP providers, claim-then-resolve repository, Service (M11); resend.go — real, opt-in EmailProvider via Resend's free tier (post-M12)
 │   ├── migrations/                # embedded SQL migrations (go:embed): 0001 users (M02), 0002 delivery_agents (M03),
 │   │                               #   0003 zones, 0004 areas, 0005 delivery_agents.current_zone_id FK (M04),
 │   │                               #   0006 rate_cards, 0007 rate_card_slabs (M05); M06 added none — pure calculation, no new schema;
 │   │                               #   0008 orders (M07); 0009 order_tracking_events (M08, no ALTER to orders);
 │   │                               #   0010 orders.assigned_agent_id + indexes (M09); 0011 reschedule_requests (M10);
-│   │                               #   0012 notifications (M11); M12 added none — no schema change required
+│   │                               #   0012 notifications (M11); M12 added none — no schema change required;
+│   │                               #   0013 status/pickup_zone_id/drop_zone_id indexes for the M12 order filter (post-M12)
 │   └── tests/
 │       ├── unit/                  # convention note — unit tests are co-located with source
 │       ├── integration/           # DB-backed integration tests (build tag: integration)
-│       └── e2e/                   # full-stack HTTP flow tests (build tag: e2e) — happy path and failed/reschedule/reassign, incl. M11 notification side effects (M12)
+│       └── e2e/                   # full-stack HTTP flow tests (build tag: e2e) — happy path and failed/reschedule/reassign, incl. M11 notification side effects (M12); openapi_contract_test.go — real router vs. docs/openapi.yaml drift check (post-M12)
 │
 ├── frontend/
 │   ├── package.json
 │   ├── vite.config.ts
+│   ├── .env.example               # VITE_API_BASE_URL — unset for local dev/same-origin deployments (post-M12)
 │   └── src/
+│       ├── vite-env.d.ts          # ImportMetaEnv typing for VITE_API_BASE_URL (post-M12)
 │       ├── components/            # Layout (role-aware nav, +Dashboard link, M12), StatusBadge, ErrorBanner, ProtectedRoute (+roles), AreaPicker (M06, shared with M07), DashboardLink (M12)
 │       ├── pages/                 # Home, LoginPage, RegisterPage, Account (profile edit);
 │       │                          #   admin/AgentsPage, agent/OperationsPage (M03); admin/ZonesPage (M04); admin/RatesPage (M05); QuotePage (M06);
@@ -835,7 +912,7 @@ last-mile-delivery-tracker/
 │       │                          #   (M07; +tracking timeline & admin transition control, M08; +assigned-agent display & admin assign/auto-assign controls, M09;
 │       │                          #   +"Reschedule delivery" control & reschedule-history section, M10; +DELIVERY_AGENT status-update control, M12);
 │       │                          #   customer/DashboardPage, agent/DashboardPage, admin/DashboardPage (+order statistics) (M12)
-│       ├── services/              # api.ts (+apiPut, +apiDelete), health.ts, auth.ts (+updateProfile), agents.ts (M03), zones.ts (M04), rates.ts (M05), quote.ts (M06), orders.ts (M07; +status/zone/agent filter params, M12), tracking.ts (M08), assignment.ts (M09), rescheduling.ts (M10)
+│       ├── services/              # api.ts (+apiPut, +apiDelete; +API_BASE_URL prefix, post-M12), health.ts, auth.ts (+updateProfile), agents.ts (M03), zones.ts (M04), rates.ts (M05), quote.ts (M06), orders.ts (M07; +status/zone/agent filter params, M12), tracking.ts (M08), assignment.ts (M09), rescheduling.ts (M10)
 │       ├── hooks/                 # useHealthCheck, useAuth
 │       ├── contexts/              # AuthContext.tsx (provider) + auth-context.ts (context object)
 │       ├── types/                 # HealthResponse, auth.ts (+ProfileUpdateInput), agent.ts (M03), zone.ts (M04), rate.ts (M05), quote.ts (M06), order.ts (M07; +assigned_agent_id, M09; +OrderFilter/ORDER_STATUSES, M12), tracking.ts (M08; +transitionsForRole, M12), assignment.ts (M09), reschedule.ts (M10)
@@ -855,8 +932,9 @@ last-mile-delivery-tracker/
 │   ├── failed-delivery.md         # reschedule endpoints, the CUSTOMER-vs-M08-matrix resolution, reschedule_requests schema, agent-freeing, M09 reuse (M10)
 │   ├── notifications.md           # 8 lifecycle events, post-commit hook pattern, provider abstraction, tracking_event_id idempotency, no API/UI (M11)
 │   ├── dashboards.md              # 3 dashboards, admin filters/statistics, the agent status-update UI fix, why no new module/table (M12)
-│   ├── openapi.yaml               # static, hand-authored OpenAPI 3.0 document mirroring api.md exactly (M12)
-│   └── system-design.md           # required ≤800-word system-design write-up (M12)
+│   ├── openapi.yaml               # static, hand-authored OpenAPI 3.0 document mirroring api.md exactly (M12); kept honest by a real-router diff test (post-M12)
+│   ├── system-design.md           # required ≤800-word system-design write-up (M12)
+│   └── deployment.md              # CORS + VITE_API_BASE_URL, per-platform env vars, live-deployment verification (post-M12)
 │
 └── scripts/
     └── seed/                      # reserved for later modules' larger seed data (M02's demo users seed from main.go instead — see its README)
@@ -963,3 +1041,9 @@ Grows with each module.
 | OpenAPI documentation matches the real API surface, evaluator-inspectable | `docs/openapi.yaml` | validated as parseable OpenAPI 3.0 YAML; cross-checked path-by-path against `docs/api.md` | `docs/api.md`, `docs/openapi.yaml` |
 | Required system-design write-up, within the 800-word limit | `docs/system-design.md` | `wc -w` verified ≤ 800 | `docs/system-design.md` |
 | Full-stack E2E flows: happy path and failed/reschedule/reassign, real router, real DB, real M11 notification side effects | `backend/tests/e2e/lifecycle_test.go` | `TestE2E_HappyPath_RegisterQuoteOrderAssignDeliver`, `TestE2E_FailedDeliveryRescheduleReassignContinues` (`-tags=e2e`) | `README.md`, `docs/dashboards.md` |
+| CORS: off by default, explicit allowlist, no cookie-based credentials header | `backend/internal/server/cors.go` | `TestCORS_*` (5 unit tests); live-verified against a real container (allow-path and deny-path both) | `docs/deployment.md` |
+| Real, opt-in email delivery via Resend, fails fast at startup if misconfigured, 10s timeout independent of request context | `backend/internal/notifications/resend.go`, `cmd/server/main.go` | `TestResendEmailProvider_*` (unit, incl. unreachable-server case) | `docs/notifications.md` |
+| Frontend API base URL configurable at build time, empty-default unchanged behavior | `frontend/src/services/api.ts`, `vite-env.d.ts` | `api.test.ts` (`API_BASE_URL` describe block) | `docs/deployment.md` |
+| CI: backend fmt/vet/build/unit/integration/e2e + frontend tsc/lint/test/build on every push/PR | `.github/workflows/ci.yml` | the workflow itself, run on GitHub | `README.md` |
+| OpenAPI document cannot silently drift from the real router | `backend/tests/e2e/openapi_contract_test.go` | `TestOpenAPIContract_DocumentedPathsMatchRealRoutes` (`-tags=e2e`) | `docs/openapi.yaml` |
+| Supporting indexes on every column the M12 order filter can query | `backend/migrations/0013_add_order_filter_indexes.sql` | verified present via `\d orders` against a fresh database | `README.md` |

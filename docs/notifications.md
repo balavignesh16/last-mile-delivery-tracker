@@ -99,22 +99,36 @@ type SmsProvider interface {
 ```
 
 `Service` depends on these two narrow interfaces only — never on a
-concrete SDK. A real provider (SES, Twilio, etc.) can be substituted
-later purely by implementing one of these two interfaces and changing
-the one line in `main.go` that constructs the provider; nothing in
-`Service` or in any of `orders`/`tracking`/`assignment`/`rescheduling`
-would need to change.
+concrete SDK. This is exactly what let a second `EmailProvider`
+implementation (below) be added later without changing `Service` or any
+of `orders`/`tracking`/`assignment`/`rescheduling` at all — only the one
+line in `main.go` that constructs the provider changed.
 
-## Log-based MVP providers
+## Providers: log-based (default) and Resend (optional, real)
 
-`LogEmailProvider` and `LogSmsProvider` (`provider.go`) are the only
-providers this module ships. They contact no external service, require
-no credentials, and satisfy this module's actual requirements — an
-attempt is made, its content is observable (via `slog.Info`), and it
-can fail safely — without adding a single dependency to `go.mod`. This
-is intentional for the MVP, not a placeholder left unfinished: no real
-paid external provider is required for this module to be considered
-complete.
+`LogEmailProvider` and `LogSmsProvider` (`provider.go`) remain the
+default — they contact no external service, require no credentials,
+and satisfy this module's actual requirements — an attempt is made, its
+content is observable (via `slog.Info`), and it can fail safely. This
+is what makes the module correct and fully testable with zero
+configuration, including in an evaluator's environment.
+
+`ResendEmailProvider` (`resend.go`) sends real email via
+[Resend](https://resend.com)'s REST API — the one real, free-tier
+`EmailProvider` this project ships. It is opt-in only:
+`cmd/server/main.go` constructs it instead of the log provider when
+`EMAIL_PROVIDER=resend` is set, and fails fast at startup if
+`RESEND_API_KEY`/`RESEND_FROM_EMAIL` are then missing (see
+`.env.example`) — a misconfiguration is caught immediately at boot, not
+silently swallowed at the first send attempt. Its `http.Client` carries
+its own 10-second timeout, independent of the caller's request
+context, so a slow or unreachable Resend outage can never stall the
+post-commit hook that invokes it (the same "must never block or fail
+the triggering commit" guarantee every provider call in this module
+already has — see "Failure handling" below). `SmsProvider` stays
+log-only in both configurations; no real SMS provider was added (SMS
+free tiers are trial-credit-limited and too unreliable for a demo to
+depend on).
 
 ## Post-commit integration
 
@@ -270,13 +284,14 @@ does not introduce it.
 
 ## Environment / configuration
 
-No new environment variables, no credentials, no external accounts.
-`notifications.NewLogEmailProvider()`/`NewLogSmsProvider()` require
-nothing beyond what `main.go` already constructs, and the module works
-correctly out of the box on a fresh `docker compose up`. A future real
-provider would introduce its own configuration (API keys, sender
-identities) at that time — none is needed, and none exists, for this
-milestone.
+Zero configuration is required to run the module correctly:
+`EMAIL_PROVIDER` defaults to `log`, and `notifications.NewLogEmailProvider()`/
+`NewLogSmsProvider()` need no credentials or external accounts — the
+module works out of the box on a fresh `docker compose up`, including in
+an automated evaluation environment with no `.env` beyond the required
+DB/JWT variables. Setting `EMAIL_PROVIDER=resend` plus `RESEND_API_KEY`/
+`RESEND_FROM_EMAIL` (see `.env.example`) switches to real email delivery
+with no other change.
 
 ## What this module deliberately does not do
 

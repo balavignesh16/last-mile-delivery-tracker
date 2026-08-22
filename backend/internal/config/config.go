@@ -15,6 +15,25 @@ type Config struct {
 	ServerPort string
 	DB         DatabaseConfig
 	JWTSecret  string
+	// CORSAllowedOrigins is optional and empty by default — no CORS
+	// header is ever added unless explicitly configured (see
+	// internal/server.CORS). Needed only once the frontend and backend
+	// are hosted on different origins; the dev setup avoids it entirely
+	// via Vite's own proxy (see frontend/vite.config.ts).
+	CORSAllowedOrigins []string
+	Notifications      NotificationsConfig
+}
+
+// NotificationsConfig selects and configures M11's EmailProvider.
+// Provider defaults to "log" (internal/notifications.LogEmailProvider,
+// no credentials, no external call) — "resend" additionally requires
+// ResendAPIKey/ResendFromEmail. SmsProvider stays log-only; nothing here
+// changes internal/notifications' own dispatch/idempotency logic, only
+// which EmailProvider implementation main.go constructs.
+type NotificationsConfig struct {
+	EmailProvider  string
+	ResendAPIKey   string
+	ResendFromAddr string
 }
 
 // DatabaseConfig holds PostgreSQL connection settings.
@@ -44,7 +63,13 @@ func Load() (*Config, error) {
 			Password: os.Getenv("DB_PASSWORD"),
 			SSLMode:  getenvDefault("DB_SSLMODE", "disable"),
 		},
-		JWTSecret: os.Getenv("JWT_SECRET"),
+		JWTSecret:          os.Getenv("JWT_SECRET"),
+		CORSAllowedOrigins: parseOriginList(os.Getenv("CORS_ALLOWED_ORIGINS")),
+		Notifications: NotificationsConfig{
+			EmailProvider:  getenvDefault("EMAIL_PROVIDER", "log"),
+			ResendAPIKey:   os.Getenv("RESEND_API_KEY"),
+			ResendFromAddr: os.Getenv("RESEND_FROM_EMAIL"),
+		},
 	}
 
 	var missing []string
@@ -90,4 +115,21 @@ func getenvDefault(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// parseOriginList splits a comma-separated CORS_ALLOWED_ORIGINS value
+// into a clean slice — empty/unset input yields nil (no CORS headers at
+// all, see internal/server.CORS), and any blank entry between commas is
+// dropped rather than becoming a spurious empty-string "allowed origin".
+func parseOriginList(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	var origins []string
+	for _, o := range strings.Split(raw, ",") {
+		if trimmed := strings.TrimSpace(o); trimmed != "" {
+			origins = append(origins, trimmed)
+		}
+	}
+	return origins
 }

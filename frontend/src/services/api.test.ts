@@ -97,3 +97,36 @@ describe('apiPost', () => {
     })
   })
 })
+
+describe('API_BASE_URL', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.unstubAllEnvs()
+    vi.resetModules()
+  })
+
+  it('prefixes every request path when VITE_API_BASE_URL is set at build time', async () => {
+    vi.stubEnv('VITE_API_BASE_URL', 'https://api.example.com')
+    vi.resetModules()
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, {}))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { apiGet: apiGetWithBaseURL } = await import('./api')
+    await apiGetWithBaseURL('/health')
+
+    const [path] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(path).toBe('https://api.example.com/health')
+  })
+
+  it('defaults to an empty prefix (relative paths, unchanged behavior) when unset', async () => {
+    vi.resetModules()
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, {}))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const { apiGet: apiGetDefault } = await import('./api')
+    await apiGetDefault('/health')
+
+    const [path] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(path).toBe('/health')
+  })
+})

@@ -29,6 +29,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"lastmiletracker/internal/agents"
@@ -56,7 +57,7 @@ func testLogger() *slog.Logger {
 // secret (test-local) and using log-based notification providers with a
 // call counter so a test can assert a notification was actually
 // attempted, without depending on parsing log output.
-func setupE2E(t *testing.T) (router http.Handler, pool *pgxpool.Pool, notifyCount *int) {
+func setupE2E(t *testing.T) (router chi.Router, pool *pgxpool.Pool, notifyCount *int) {
 	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {

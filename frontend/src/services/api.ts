@@ -3,9 +3,20 @@
 // mapping is enough for this project's scope.
 //
 // Callers pass the full path (e.g. '/health', '/api/v1/auth/login') —
-// there is no automatic prefixing, since the backend's own route
-// structure already distinguishes unversioned infrastructure endpoints
-// (/health) from versioned business endpoints (/api/v1/*).
+// there is no automatic prefixing beyond API_BASE_URL below, since the
+// backend's own route structure already distinguishes unversioned
+// infrastructure endpoints (/health) from versioned business endpoints
+// (/api/v1/*).
+
+// API_BASE_URL is empty unless VITE_API_BASE_URL is set at build time,
+// in which case every request path below is prefixed with it. Empty is
+// the correct default for local dev (Vite's proxy in vite.config.ts
+// makes '/api/*' and '/health' same-origin already) and for any
+// deployment where the frontend is served from the same origin as the
+// backend; it only needs to be set once frontend and backend are
+// deployed to different origins (e.g. a static frontend host + a
+// separately hosted API) — see vite-env.d.ts and .env.example.
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
 
 export class ApiError extends Error {
   status?: number
@@ -20,7 +31,7 @@ export class ApiError extends Error {
 export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response
   try {
-    response = await fetch(path, init)
+    response = await fetch(API_BASE_URL + path, init)
   } catch {
     throw new ApiError('Could not reach the backend. Is it running?')
   }

@@ -78,15 +78,35 @@ func main() {
 	ordersRepo := orders.NewPostgresRepository(pool)
 	trackingRepo := tracking.NewPostgresRepository(pool)
 
-	// M11: log-based providers for MVP (no external credentials, no new
-	// dependency — see docs/notifications.md). notificationsService.
-	// NotifyTransition/NotifyOrderCreated are wired below as post-commit
-	// hooks into tracking/assignment/rescheduling/orders — none of those
-	// packages import internal/notifications themselves.
+	// M11/post-M12: EmailProvider defaults to the log-based provider (no
+	// external credentials, no new dependency — see docs/notifications.md)
+	// unless EMAIL_PROVIDER=resend is explicitly set, in which case a real
+	// Resend account is required. SmsProvider stays log-only either way —
+	// no real SMS provider was added (see docs/notifications.md's own
+	// reasoning). notificationsService.NotifyTransition/NotifyOrderCreated
+	// are wired below as post-commit hooks into
+	// tracking/assignment/rescheduling/orders — none of those packages
+	// import internal/notifications themselves.
+	var emailProvider notifications.EmailProvider
+	switch cfg.Notifications.EmailProvider {
+	case "resend":
+		if cfg.Notifications.ResendAPIKey == "" || cfg.Notifications.ResendFromAddr == "" {
+			logger.Error("EMAIL_PROVIDER=resend requires RESEND_API_KEY and RESEND_FROM_EMAIL to both be set")
+			os.Exit(1)
+		}
+		emailProvider = notifications.NewResendEmailProvider(cfg.Notifications.ResendAPIKey, cfg.Notifications.ResendFromAddr)
+		logger.Info("email notifications will be sent via Resend", "from", cfg.Notifications.ResendFromAddr)
+	case "log", "":
+		emailProvider = notifications.NewLogEmailProvider()
+	default:
+		logger.Error("unrecognized EMAIL_PROVIDER value", "value", cfg.Notifications.EmailProvider, "want", "log or resend")
+		os.Exit(1)
+	}
+
 	notificationsRepo := notifications.NewPostgresRepository(pool)
 	notificationsService := notifications.NewService(
 		notificationsRepo, ordersRepo, usersRepo, trackingRepo,
-		notifications.NewLogEmailProvider(), notifications.NewLogSmsProvider(),
+		emailProvider, notifications.NewLogSmsProvider(),
 	)
 
 	assignmentRepo := assignment.NewPostgresRepository(pool, agentsRepo, ordersRepo, trackingRepo, notificationsService.NotifyTransition)
@@ -117,10 +137,17 @@ func main() {
 		assignment.Mount(assignmentRepo, cfg.JWTSecret),
 		rescheduling.Mount(reschedulingRepo, ordersRepo, cfg.JWTSecret),
 	)
+	// CORS is a wrapper around the fully-built router, not a parameter of
+	// server.NewRouter itself — see server.CORS's own doc comment for
+	// why. An empty/unset CORS_ALLOWED_ORIGINS adds no header at all,
+	// exactly today's behavior; it only needs to be set once the
+	// frontend is hosted on a different origin than this backend.
+	handler := server.CORS(cfg.CORSAllowedOrigins)(router)
+
 	addr := net.JoinHostPort(cfg.ServerHost, cfg.ServerPort)
 	httpServer := &http.Server{
 		Addr:              addr,
-		Handler:           router,
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

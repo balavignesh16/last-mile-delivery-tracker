@@ -64,6 +64,51 @@ func TestLoad_Defaults(t *testing.T) {
 	}
 }
 
+func TestLoad_NotificationsDefaults(t *testing.T) {
+	t.Setenv("DB_HOST", "localhost")
+	t.Setenv("DB_PORT", "5432")
+	t.Setenv("DB_NAME", "lastmile")
+	t.Setenv("DB_USER", "lastmile")
+	t.Setenv("DB_PASSWORD", "secret")
+	t.Setenv("JWT_SECRET", "test-secret")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if cfg.Notifications.EmailProvider != "log" {
+		t.Errorf("expected default EmailProvider=log, got %q", cfg.Notifications.EmailProvider)
+	}
+	if cfg.CORSAllowedOrigins != nil {
+		t.Errorf("expected nil CORSAllowedOrigins by default, got %v", cfg.CORSAllowedOrigins)
+	}
+}
+
+func TestLoad_ResendConfigured(t *testing.T) {
+	t.Setenv("DB_HOST", "localhost")
+	t.Setenv("DB_PORT", "5432")
+	t.Setenv("DB_NAME", "lastmile")
+	t.Setenv("DB_USER", "lastmile")
+	t.Setenv("DB_PASSWORD", "secret")
+	t.Setenv("JWT_SECRET", "test-secret")
+	t.Setenv("EMAIL_PROVIDER", "resend")
+	t.Setenv("RESEND_API_KEY", "re_test_key")
+	t.Setenv("RESEND_FROM_EMAIL", "orders@example.com")
+	t.Setenv("CORS_ALLOWED_ORIGINS", "https://app.example.com, https://admin.example.com ,")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if cfg.Notifications.EmailProvider != "resend" || cfg.Notifications.ResendAPIKey != "re_test_key" || cfg.Notifications.ResendFromAddr != "orders@example.com" {
+		t.Errorf("Notifications = %+v, want resend/re_test_key/orders@example.com", cfg.Notifications)
+	}
+	want := []string{"https://app.example.com", "https://admin.example.com"}
+	if len(cfg.CORSAllowedOrigins) != len(want) || cfg.CORSAllowedOrigins[0] != want[0] || cfg.CORSAllowedOrigins[1] != want[1] {
+		t.Errorf("CORSAllowedOrigins = %v, want %v (whitespace trimmed, blank entries dropped)", cfg.CORSAllowedOrigins, want)
+	}
+}
+
 func TestConfig_DSN(t *testing.T) {
 	cfg := &Config{
 		DB: DatabaseConfig{
