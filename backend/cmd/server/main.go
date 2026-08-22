@@ -81,12 +81,13 @@ func main() {
 	// M11/post-M12: EmailProvider defaults to the log-based provider (no
 	// external credentials, no new dependency — see docs/notifications.md)
 	// unless EMAIL_PROVIDER=resend is explicitly set, in which case a real
-	// Resend account is required. SmsProvider stays log-only either way —
-	// no real SMS provider was added (see docs/notifications.md's own
-	// reasoning). notificationsService.NotifyTransition/NotifyOrderCreated
-	// are wired below as post-commit hooks into
-	// tracking/assignment/rescheduling/orders — none of those packages
-	// import internal/notifications themselves.
+	// Resend account is required. SmsProvider follows the identical
+	// pattern: defaults to log-based unless SMS_PROVIDER=twilio is
+	// explicitly set, in which case a real Twilio account is required.
+	// notificationsService.NotifyTransition/NotifyOrderCreated are wired
+	// below as post-commit hooks into tracking/assignment/rescheduling/
+	// orders — none of those packages import internal/notifications
+	// themselves.
 	var emailProvider notifications.EmailProvider
 	switch cfg.Notifications.EmailProvider {
 	case "resend":
@@ -103,10 +104,26 @@ func main() {
 		os.Exit(1)
 	}
 
+	var smsProvider notifications.SmsProvider
+	switch cfg.Notifications.SMSProvider {
+	case "twilio":
+		if cfg.Notifications.TwilioAccountSID == "" || cfg.Notifications.TwilioAuthToken == "" || cfg.Notifications.TwilioFromNumber == "" {
+			logger.Error("SMS_PROVIDER=twilio requires TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, and TWILIO_FROM_NUMBER to all be set")
+			os.Exit(1)
+		}
+		smsProvider = notifications.NewTwilioSmsProvider(cfg.Notifications.TwilioAccountSID, cfg.Notifications.TwilioAuthToken, cfg.Notifications.TwilioFromNumber)
+		logger.Info("sms notifications will be sent via Twilio", "from", cfg.Notifications.TwilioFromNumber)
+	case "log", "":
+		smsProvider = notifications.NewLogSmsProvider()
+	default:
+		logger.Error("unrecognized SMS_PROVIDER value", "value", cfg.Notifications.SMSProvider, "want", "log or twilio")
+		os.Exit(1)
+	}
+
 	notificationsRepo := notifications.NewPostgresRepository(pool)
 	notificationsService := notifications.NewService(
 		notificationsRepo, ordersRepo, usersRepo, trackingRepo,
-		emailProvider, notifications.NewLogSmsProvider(),
+		emailProvider, smsProvider,
 	)
 
 	assignmentRepo := assignment.NewPostgresRepository(pool, agentsRepo, ordersRepo, trackingRepo, notificationsService.NotifyTransition)

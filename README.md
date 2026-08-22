@@ -47,8 +47,19 @@ assignment's own "free-tier service" wording. Addressed:
   `EMAIL_PROVIDER` defaults to `log` (zero credentials, zero external
   calls, unchanged from M11); set it to `resend` plus `RESEND_API_KEY`/
   `RESEND_FROM_EMAIL` to send real mail — the backend fails fast at
-  startup if those are missing while `resend` is selected. SMS stays
-  log-only (see `docs/notifications.md` for why).
+  startup if those are missing while `resend` is selected.
+- **Real SMS, opt-in** — `notifications.TwilioSmsProvider`
+  (`internal/notifications/twilio.go`) sends real SMS via
+  [Twilio](https://www.twilio.com)'s free trial, behind the exact same
+  `SmsProvider` interface `LogSmsProvider` already satisfies — the
+  identical pattern as real email, one provider swap, zero change to
+  `internal/notifications`' dispatch/idempotency logic. `SMS_PROVIDER`
+  defaults to `log`; set it to `twilio` plus `TWILIO_ACCOUNT_SID`/
+  `TWILIO_AUTH_TOKEN`/`TWILIO_FROM_NUMBER` to send real texts — same
+  fail-fast-at-startup guarantee if those are missing. A Twilio trial
+  account can only text phone numbers verified in the Twilio console —
+  see `docs/notifications.md` for the full, honestly-documented
+  limitation.
 - **A configurable frontend API base URL** (`VITE_API_BASE_URL`,
   `frontend/services/api.ts`) — the one change deployment actually
   required: every request in the frontend already funneled through one
@@ -800,11 +811,10 @@ explicitly states M11 adds no REST API. Short version:
   goroutines against real Postgres.
 - **Provider abstraction**: `EmailProvider`/`SmsProvider`, two narrow
   interfaces. `LogEmailProvider`/`LogSmsProvider` are the zero-config
-  default; `ResendEmailProvider` (post-M12) sends real email via
-  [Resend](https://resend.com)'s free tier behind the identical
-  interface, opt-in via `EMAIL_PROVIDER=resend` — see "Post-M12
-  hardening" above and `docs/notifications.md`. SMS stays log-only
-  either way.
+  default; `ResendEmailProvider` and `TwilioSmsProvider` (both
+  post-M12) send real email/SMS behind the identical interfaces,
+  opt-in via `EMAIL_PROVIDER=resend`/`SMS_PROVIDER=twilio` — see
+  "Post-M12 hardening" above and `docs/notifications.md`.
 - **Failure containment**: a provider error is caught, logged, and
   recorded as that one notification's `FAILED` status; a panicking
   provider is recovered. Neither can ever roll back or fail the
@@ -924,7 +934,7 @@ last-mile-delivery-tracker/
 │   │   ├── tracking/              # status state machine, order_tracking_events domain, repository, handlers, routes (M08)
 │   │   ├── assignment/            # candidate ranking, eligibility, repository (reuses tracking.TransitionTx), handlers, routes (M09)
 │   │   ├── rescheduling/          # reschedule domain/validation, repository (reuses tracking.TransitionTx, frees the previous agent), handlers, routes (M10)
-│   │   └── notifications/         # event->content mapping, provider abstraction + log-based MVP providers, claim-then-resolve repository, Service (M11); resend.go — real, opt-in EmailProvider via Resend's free tier (post-M12)
+│   │   └── notifications/         # event->content mapping, provider abstraction + log-based MVP providers, claim-then-resolve repository, Service (M11); resend.go — real, opt-in EmailProvider via Resend's free tier (post-M12); twilio.go — real, opt-in SmsProvider via Twilio's free trial (post-M12)
 │   ├── migrations/                # embedded SQL migrations (go:embed): 0001 users (M02), 0002 delivery_agents (M03),
 │   │                               #   0003 zones, 0004 areas, 0005 delivery_agents.current_zone_id FK (M04),
 │   │                               #   0006 rate_cards, 0007 rate_card_slabs (M05); M06 added none — pure calculation, no new schema;
@@ -1081,6 +1091,7 @@ Grows with each module.
 | Full-stack E2E flows: happy path and failed/reschedule/reassign, real router, real DB, real M11 notification side effects | `backend/tests/e2e/lifecycle_test.go` | `TestE2E_HappyPath_RegisterQuoteOrderAssignDeliver`, `TestE2E_FailedDeliveryRescheduleReassignContinues` (`-tags=e2e`) | `README.md`, `docs/dashboards.md` |
 | CORS: off by default, explicit allowlist, no cookie-based credentials header | `backend/internal/server/cors.go` | `TestCORS_*` (5 unit tests); live-verified against a real container (allow-path and deny-path both) | `docs/deployment.md` |
 | Real, opt-in email delivery via Resend, fails fast at startup if misconfigured, 10s timeout independent of request context | `backend/internal/notifications/resend.go`, `cmd/server/main.go` | `TestResendEmailProvider_*` (unit, incl. unreachable-server case) | `docs/notifications.md` |
+| Real, opt-in SMS delivery via Twilio, fails fast at startup if misconfigured, 10s timeout independent of request context, auth token never leaks into errors | `backend/internal/notifications/twilio.go`, `cmd/server/main.go` | `TestTwilioSmsProvider_*` (unit, incl. unreachable-server and secret-hygiene cases) | `docs/notifications.md` |
 | Frontend API base URL configurable at build time, empty-default unchanged behavior | `frontend/src/services/api.ts`, `vite-env.d.ts` | `api.test.ts` (`API_BASE_URL` describe block) | `docs/deployment.md` |
 | CI: backend fmt/vet/build/unit/integration/e2e + frontend tsc/lint/test/build on every push/PR | `.github/workflows/ci.yml` | the workflow itself, run on GitHub | `README.md` |
 | OpenAPI document cannot silently drift from the real router | `backend/tests/e2e/openapi_contract_test.go` | `TestOpenAPIContract_DocumentedPathsMatchRealRoutes` (`-tags=e2e`) | `docs/openapi.yaml` |

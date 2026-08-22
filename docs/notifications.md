@@ -104,7 +104,7 @@ implementation (below) be added later without changing `Service` or any
 of `orders`/`tracking`/`assignment`/`rescheduling` at all — only the one
 line in `main.go` that constructs the provider changed.
 
-## Providers: log-based (default) and Resend (optional, real)
+## Providers: log-based (default), Resend (optional, real email), and Twilio (optional, real SMS)
 
 `LogEmailProvider` and `LogSmsProvider` (`provider.go`) remain the
 default — they contact no external service, require no credentials,
@@ -125,10 +125,38 @@ its own 10-second timeout, independent of the caller's request
 context, so a slow or unreachable Resend outage can never stall the
 post-commit hook that invokes it (the same "must never block or fail
 the triggering commit" guarantee every provider call in this module
-already has — see "Failure handling" below). `SmsProvider` stays
-log-only in both configurations; no real SMS provider was added (SMS
-free tiers are trial-credit-limited and too unreliable for a demo to
-depend on).
+already has — see "Failure handling" below).
+
+`TwilioSmsProvider` (`twilio.go`) sends real SMS via
+[Twilio](https://www.twilio.com)'s REST API — the one real, free-trial
+`SmsProvider` this project ships, built on the same pattern as
+`ResendEmailProvider` above: a plain `net/http` POST (form-encoded,
+HTTP Basic Auth with the account SID/auth token) with no SDK and no new
+`go.mod` dependency. It is opt-in only: `cmd/server/main.go` constructs
+it instead of the log provider when `SMS_PROVIDER=twilio` is set, and
+fails fast at startup if `TWILIO_ACCOUNT_SID`/`TWILIO_AUTH_TOKEN`/
+`TWILIO_FROM_NUMBER` are then missing (see `.env.example`). Its
+`http.Client` carries the identical independent 10-second timeout
+`ResendEmailProvider` uses, for the same reason.
+
+**Twilio trial limitation, documented honestly:** a Twilio trial
+account (no billing added) can only send SMS to phone numbers that have
+been explicitly verified in the Twilio console — it cannot text an
+arbitrary customer's number. This is a constraint of the free trial
+tier itself, not of this implementation; it mirrors the same kind of
+sandbox restriction `ResendEmailProvider` already documents for
+Resend's free tier (deliverability limited to the account's own
+verified address absent domain verification). A customer's phone
+number is used exactly as stored in `users.phone` — no formatting or
+validation is added or changed here; Twilio expects
+[E.164](https://www.twilio.com/docs/glossary/what-e164) format
+(e.g. `+15550100`).
+
+Both `ResendEmailProvider` and `TwilioSmsProvider` are pure
+implementation substitutions behind interfaces `Service` already
+depended on — neither required any change to `service.go`'s dispatch,
+idempotency, or post-commit-hook logic; only `main.go`'s provider
+construction changed.
 
 ## Post-commit integration
 
@@ -281,17 +309,28 @@ does not introduce it.
   tracking event against real Postgres and asserts exactly one claim,
   one provider call, and one persisted row — repeated with `-count=5`
   to rule out flakiness.
+- **Provider unit tests** (`resend_test.go`, `twilio_test.go`, an
+  `httptest.Server` in place of the real API for both): request
+  method/path/headers/body shape, a non-2xx response becomes an error,
+  an unreachable server becomes an error, and — Twilio specifically —
+  the auth token never appears in a returned error string.
 
 ## Environment / configuration
 
 Zero configuration is required to run the module correctly:
-`EMAIL_PROVIDER` defaults to `log`, and `notifications.NewLogEmailProvider()`/
-`NewLogSmsProvider()` need no credentials or external accounts — the
-module works out of the box on a fresh `docker compose up`, including in
-an automated evaluation environment with no `.env` beyond the required
-DB/JWT variables. Setting `EMAIL_PROVIDER=resend` plus `RESEND_API_KEY`/
-`RESEND_FROM_EMAIL` (see `.env.example`) switches to real email delivery
-with no other change.
+`EMAIL_PROVIDER` and `SMS_PROVIDER` both default to `log`, and
+`notifications.NewLogEmailProvider()`/`NewLogSmsProvider()` need no
+credentials or external accounts — the module works out of the box on a
+fresh `docker compose up`, including in an automated evaluation
+environment with no `.env` beyond the required DB/JWT variables.
+
+Setting `EMAIL_PROVIDER=resend` plus `RESEND_API_KEY`/`RESEND_FROM_EMAIL`
+(see `.env.example`) switches to real email delivery with no other
+change. Setting `SMS_PROVIDER=twilio` plus `TWILIO_ACCOUNT_SID`/
+`TWILIO_AUTH_TOKEN`/`TWILIO_FROM_NUMBER` switches to real SMS delivery
+the identical way — each provider selection is fully independent of the
+other (real email with log-only SMS, real SMS with log-only email, both
+real, or both log, are all valid combinations).
 
 ## What this module deliberately does not do
 

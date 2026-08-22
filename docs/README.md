@@ -63,8 +63,9 @@ Written so far:
   separate M09 call, and why no `delivery_attempts` table exists (M10).
 - [`notifications.md`](./notifications.md) — the M11 Notification
   Service: the eight lifecycle events, why the customer is the only
-  recipient, the email/SMS provider abstraction and its log-based MVP
-  implementation, the post-commit hook pattern that avoids an import
+  recipient, the email/SMS provider abstraction, its log-based MVP
+  implementation, and the real, opt-in Resend/Twilio providers
+  (post-M12), the post-commit hook pattern that avoids an import
   cycle with M07/M08/M09/M10, failure containment, why idempotency is
   anchored on the exact `tracking_event_id` (not `(order_id, event,
   channel)`), and why there is no REST API, no frontend UI, no

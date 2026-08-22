@@ -79,6 +79,9 @@ func TestLoad_NotificationsDefaults(t *testing.T) {
 	if cfg.Notifications.EmailProvider != "log" {
 		t.Errorf("expected default EmailProvider=log, got %q", cfg.Notifications.EmailProvider)
 	}
+	if cfg.Notifications.SMSProvider != "log" {
+		t.Errorf("expected default SMSProvider=log, got %q", cfg.Notifications.SMSProvider)
+	}
 	if cfg.CORSAllowedOrigins != nil {
 		t.Errorf("expected nil CORSAllowedOrigins by default, got %v", cfg.CORSAllowedOrigins)
 	}
@@ -106,6 +109,30 @@ func TestLoad_ResendConfigured(t *testing.T) {
 	want := []string{"https://app.example.com", "https://admin.example.com"}
 	if len(cfg.CORSAllowedOrigins) != len(want) || cfg.CORSAllowedOrigins[0] != want[0] || cfg.CORSAllowedOrigins[1] != want[1] {
 		t.Errorf("CORSAllowedOrigins = %v, want %v (whitespace trimmed, blank entries dropped)", cfg.CORSAllowedOrigins, want)
+	}
+}
+
+func TestLoad_TwilioConfigured(t *testing.T) {
+	t.Setenv("DB_HOST", "localhost")
+	t.Setenv("DB_PORT", "5432")
+	t.Setenv("DB_NAME", "lastmile")
+	t.Setenv("DB_USER", "lastmile")
+	t.Setenv("DB_PASSWORD", "secret")
+	t.Setenv("JWT_SECRET", "test-secret")
+	t.Setenv("SMS_PROVIDER", "twilio")
+	t.Setenv("TWILIO_ACCOUNT_SID", "AC_test_sid")
+	t.Setenv("TWILIO_AUTH_TOKEN", "test_auth_token")
+	t.Setenv("TWILIO_FROM_NUMBER", "+15550100")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if cfg.Notifications.SMSProvider != "twilio" ||
+		cfg.Notifications.TwilioAccountSID != "AC_test_sid" ||
+		cfg.Notifications.TwilioAuthToken != "test_auth_token" ||
+		cfg.Notifications.TwilioFromNumber != "+15550100" {
+		t.Errorf("Notifications = %+v, want twilio/AC_test_sid/test_auth_token/+15550100", cfg.Notifications)
 	}
 }
 

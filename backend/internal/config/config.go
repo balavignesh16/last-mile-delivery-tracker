@@ -24,16 +24,24 @@ type Config struct {
 	Notifications      NotificationsConfig
 }
 
-// NotificationsConfig selects and configures M11's EmailProvider.
-// Provider defaults to "log" (internal/notifications.LogEmailProvider,
-// no credentials, no external call) — "resend" additionally requires
-// ResendAPIKey/ResendFromEmail. SmsProvider stays log-only; nothing here
+// NotificationsConfig selects and configures M11's EmailProvider and
+// SmsProvider. EmailProvider defaults to "log"
+// (internal/notifications.LogEmailProvider, no credentials, no external
+// call) — "resend" additionally requires ResendAPIKey/ResendFromEmail.
+// SMSProvider defaults to "log" (internal/notifications.LogSmsProvider)
+// the same way — "twilio" additionally requires
+// TwilioAccountSID/TwilioAuthToken/TwilioFromNumber. Nothing here
 // changes internal/notifications' own dispatch/idempotency logic, only
-// which EmailProvider implementation main.go constructs.
+// which EmailProvider/SmsProvider implementation main.go constructs.
 type NotificationsConfig struct {
 	EmailProvider  string
 	ResendAPIKey   string
 	ResendFromAddr string
+
+	SMSProvider      string
+	TwilioAccountSID string
+	TwilioAuthToken  string
+	TwilioFromNumber string
 }
 
 // DatabaseConfig holds PostgreSQL connection settings.
@@ -69,6 +77,11 @@ func Load() (*Config, error) {
 			EmailProvider:  getenvDefault("EMAIL_PROVIDER", "log"),
 			ResendAPIKey:   os.Getenv("RESEND_API_KEY"),
 			ResendFromAddr: os.Getenv("RESEND_FROM_EMAIL"),
+
+			SMSProvider:      getenvDefault("SMS_PROVIDER", "log"),
+			TwilioAccountSID: os.Getenv("TWILIO_ACCOUNT_SID"),
+			TwilioAuthToken:  os.Getenv("TWILIO_AUTH_TOKEN"),
+			TwilioFromNumber: os.Getenv("TWILIO_FROM_NUMBER"),
 		},
 	}
 
