@@ -237,6 +237,32 @@ paths:
         "404": { $ref: "#/components/responses/NotFound" }
         "422": { $ref: "#/components/responses/Unprocessable" }
 
+  /api/v1/agents/{id}/zone:
+    put:
+      tags: [Agents]
+      summary: Set current_zone_id (DELIVERY_AGENT only, self-only) — the write path assignment.IsEligible requires
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [zone_id]
+              properties:
+                zone_id: { type: string, format: uuid }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Agent" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
   /api/v1/zones:
     post:
       tags: [Zones]

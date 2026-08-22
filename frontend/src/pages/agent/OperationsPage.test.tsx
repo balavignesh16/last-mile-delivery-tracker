@@ -12,6 +12,10 @@ function jsonResponse(status: number, body: unknown): Response {
   return { ok: status >= 200 && status < 300, status, json: async () => body } as Response
 }
 
+function zonesResponse() {
+  return jsonResponse(200, [{ id: 'zone-1', name: 'North', active: true, created_at: '2026-01-01T00:00:00Z' }])
+}
+
 function agentProfile(overrides: Record<string, unknown> = {}) {
   return {
     id: 'a1',
@@ -76,6 +80,7 @@ describe('OperationsPage', () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.endsWith('/agents/me')) return jsonResponse(200, agentProfile())
+      if (url.endsWith('/zones')) return zonesResponse()
       if (url.includes('/availability') && init?.method === 'PUT') {
         return jsonResponse(200, agentProfile({ availability: 'AVAILABLE' }))
       }
@@ -121,6 +126,7 @@ describe('OperationsPage', () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.endsWith('/agents/me')) return jsonResponse(200, agentProfile())
+      if (url.endsWith('/zones')) return zonesResponse()
       if (url.includes('/location') && init?.method === 'PUT') {
         return jsonResponse(
           200,
@@ -143,5 +149,80 @@ describe('OperationsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /update location/i }))
 
     await waitFor(() => expect(screen.getByText('Location updated.')).toBeTruthy())
+  })
+
+  it('loads the zone list and submits a zone update', async () => {
+    mockAgentAuth()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/agents/me')) return jsonResponse(200, agentProfile())
+      if (url.endsWith('/zones')) return zonesResponse()
+      if (url.includes('/zone') && init?.method === 'PUT') {
+        return jsonResponse(200, agentProfile({ current_zone_id: 'zone-1' }))
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <MemoryRouter>
+        <OperationsPage />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByLabelText('Zone')).toBeTruthy())
+    fireEvent.change(screen.getByLabelText('Zone'), { target: { value: 'zone-1' } })
+    fireEvent.click(screen.getByRole('button', { name: /update zone/i }))
+
+    await waitFor(() => expect(screen.getByText('Zone updated.')).toBeTruthy())
+  })
+
+  it('requires a zone to be chosen before submitting', async () => {
+    mockAgentAuth()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url.endsWith('/zones')) return zonesResponse()
+        return jsonResponse(200, agentProfile())
+      }),
+    )
+
+    render(
+      <MemoryRouter>
+        <OperationsPage />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByLabelText('Zone')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /update zone/i }))
+
+    await waitFor(() => expect(screen.getByText('Choose a zone.')).toBeTruthy())
+  })
+
+  it('surfaces a server error when the zone update is rejected', async () => {
+    mockAgentAuth()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/agents/me')) return jsonResponse(200, agentProfile())
+      if (url.endsWith('/zones')) return zonesResponse()
+      if (url.includes('/zone') && init?.method === 'PUT') {
+        return jsonResponse(422, { error: 'zone is not active' })
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <MemoryRouter>
+        <OperationsPage />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByLabelText('Zone')).toBeTruthy())
+    fireEvent.change(screen.getByLabelText('Zone'), { target: { value: 'zone-1' } })
+    fireEvent.click(screen.getByRole('button', { name: /update zone/i }))
+
+    await waitFor(() => expect(screen.getByText('zone is not active')).toBeTruthy())
   })
 })

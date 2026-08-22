@@ -38,6 +38,14 @@ function under the same row lock automatic assignment's candidate
 filtering uses, so the two paths can never diverge on what "eligible"
 means.
 
+`current_zone_id` is read here, never written — this file
+(`internal/assignment/candidate.go`) is frozen and stays that way. The
+write path lives entirely in `internal/agents` (`PUT
+/api/v1/agents/{id}/zone` — see `docs/user-agent-management.md`), which
+for a while didn't exist at all: only direct SQL could ever populate the
+column, so no real agent using the app could satisfy this rule. That gap
+is closed without touching this module's eligibility or ranking logic.
+
 ## Auto-assignment ranking
 
 No coordinates exist anywhere in this schema for orders, zones, or

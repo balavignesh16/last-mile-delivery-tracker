@@ -454,3 +454,13 @@ func (f *fakeAgentsRepo) UpdateLocation(_ context.Context, id string, lat, lng f
 	f.byID[id] = a
 	return a, nil
 }
+
+func (f *fakeAgentsRepo) UpdateZone(_ context.Context, id, zoneID string) (agents.AgentWithUser, error) {
+	a, ok := f.byID[id]
+	if !ok {
+		return agents.AgentWithUser{}, agents.ErrNotFound
+	}
+	a.CurrentZoneID = &zoneID
+	f.byID[id] = a
+	return a, nil
+}

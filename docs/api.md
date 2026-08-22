@@ -207,16 +207,33 @@ Sets `current_lat`, `current_lng`, and `location_updated_at` (from the database'
 
 **Errors**: `401`, `403` (another agent's `{id}`, or a non-agent role), `404`, `422` (latitude outside ±90, longitude outside ±180, missing coordinate, or a non-finite value).
 
+### `PUT /api/v1/agents/{id}/zone`
+
+**Auth**: required, **DELIVERY_AGENT only** (not even ADMIN — same reasoning as location). Self-only, same ownership check as availability/location.
+
+**Purpose**: sets `current_zone_id` — the column `assignment.IsEligible` (M09) requires to be non-nil before an agent can ever be selected by auto-assign. This is the *only* write path for that column in the entire application; before this endpoint existed, `current_zone_id` could only be populated directly via SQL (see migration `0005`'s comment), so a real delivery agent using the app had no way to ever become eligible for assignment.
+
+```bash
+curl -X PUT http://localhost:8080/api/v1/agents/$AGENT_ID/zone \
+  -H "Authorization: Bearer $AGENT_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"zone_id":"<a real zones.id>"}'
+```
+
+The given `zone_id` must reference a real, **active** zone — fetched via `GET /zones` (see below; `DELIVERY_AGENT` can read that list specifically to populate this call).
+
+**Errors**: `401`, `403` (another agent's `{id}`, or a non-agent role), `404` (unknown agent `{id}`), `422` (missing `zone_id`, or `zone_id` doesn't reference a real, active zone).
+
 ---
 
-## Zones and areas (M04, read access widened in M06)
+## Zones and areas (M04, read access widened in M06 and again for M09-adjacent hardening)
 
 Geographic configuration: `zones` are the top-level unit, `areas` belong to
 exactly one zone. Every mutation endpoint below is **ADMIN only**; the three
-`GET` endpoints are **ADMIN or CUSTOMER** (widened in M06 so a customer can
-pick a pickup/drop area when requesting a quote — see
-`docs/zone-management.md`'s RBAC section for the full reasoning). `DELIVERY_AGENT`
-gets `403` on every endpoint in this section.
+`GET` endpoints are **ADMIN, CUSTOMER, or DELIVERY_AGENT** — CUSTOMER was
+widened in M06 so a customer can pick a pickup/drop area when requesting a
+quote, and DELIVERY_AGENT was widened later so an agent can fetch the zone
+list needed to call `PUT /agents/{id}/zone` above (see
+`docs/zone-management.md`'s RBAC section for the full reasoning).
 
 ### `POST /api/v1/zones`
 

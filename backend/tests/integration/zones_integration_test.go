@@ -146,9 +146,11 @@ func TestZoneEndpoints_RoleGating(t *testing.T) {
 		})
 	}
 
-	// GET /zones is readable by ADMIN and CUSTOMER (M06: a customer must
-	// be able to list zones/areas to place an order) but still not
-	// DELIVERY_AGENT or an unauthenticated caller.
+	// GET /zones is readable by ADMIN, CUSTOMER (M06: a customer must be
+	// able to list zones/areas to place an order), and DELIVERY_AGENT
+	// (M13-equivalent hardening: an agent needs the zone list to pick
+	// their own current_zone_id via PUT /agents/{id}/zone) — but not an
+	// unauthenticated caller.
 	getCases := []struct {
 		label string
 		token string
@@ -156,7 +158,7 @@ func TestZoneEndpoints_RoleGating(t *testing.T) {
 	}{
 		{"admin allowed", admin, http.StatusOK},
 		{"customer allowed", customer, http.StatusOK},
-		{"delivery agent forbidden", agent, http.StatusForbidden},
+		{"delivery agent allowed", agent, http.StatusOK},
 		{"unauthenticated rejected", "", http.StatusUnauthorized},
 	}
 	for _, tc := range getCases {
@@ -279,11 +281,12 @@ func TestAreaEndpoints_RoleGating(t *testing.T) {
 	}
 }
 
-// TestAreaEndpoints_GetRoleGating covers the M06 RBAC widening
+// TestAreaEndpoints_GetRoleGating covers the read-access widening
 // specifically: GET /zones/{zoneID}/areas (and, via
 // TestZoneEndpoints_RoleGating, GET /zones and GET /zones/{id}) must
-// admit CUSTOMER now, while every mutation route on this module stays
-// exactly as admin-only as M04 left it.
+// admit CUSTOMER (M06) and DELIVERY_AGENT (agents need the zone list to
+// pick their own current_zone_id), while every mutation route on this
+// module stays exactly as admin-only as M04 left it.
 func TestAreaEndpoints_GetRoleGating(t *testing.T) {
 	router, uRepo, _, _ := setupZonesTest(t)
 	admin := adminToken(t, uRepo)
@@ -304,7 +307,7 @@ func TestAreaEndpoints_GetRoleGating(t *testing.T) {
 	}{
 		{"admin allowed", admin, http.StatusOK},
 		{"customer allowed", customer, http.StatusOK},
-		{"delivery agent forbidden", agent, http.StatusForbidden},
+		{"delivery agent allowed", agent, http.StatusOK},
 		{"unauthenticated rejected", "", http.StatusUnauthorized},
 	}
 	for _, tc := range cases {

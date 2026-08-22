@@ -14,6 +14,7 @@ import (
 	"lastmiletracker/internal/auth"
 	"lastmiletracker/internal/server"
 	"lastmiletracker/internal/users"
+	"lastmiletracker/internal/zones"
 )
 
 // agentResponse is the only shape an agent is ever allowed to leave this
@@ -286,6 +287,92 @@ func UpdateLocationHandler(repo Repository) http.HandlerFunc {
 		if err != nil {
 			slog.Error("location update failed", "error", err)
 			server.WriteError(w, http.StatusInternalServerError, "could not update location")
+			return
+		}
+
+		server.WriteJSON(w, http.StatusOK, toAgentResponse(updated))
+	}
+}
+
+type updateZoneRequest struct {
+	ZoneID string `json:"zone_id"`
+}
+
+// UpdateZoneHandler handles PUT /api/v1/agents/{id}/zone — self-only,
+// same reasoning as UpdateLocationHandler: this is the agent reporting
+// their own current operating zone, not something ADMIN manages on
+// their behalf.
+//
+// This is the only write path in the application for current_zone_id —
+// the column assignment.IsEligible requires to be non-nil before an
+// agent can ever be selected by auto-assign. Before this handler
+// existed, that column could only be populated directly via SQL (see
+// migration 0005's comment and docs/user-agent-management.md), so no
+// real delivery agent using the app could ever become eligible for
+// assignment.
+func UpdateZoneHandler(repo Repository, zonesRepo zones.Repository) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		agentID := chi.URLParam(r, "id")
+
+		identity, ok := auth.IdentityFromContext(r.Context())
+		if !ok {
+			server.WriteError(w, http.StatusUnauthorized, "authentication required")
+			return
+		}
+
+		agent, err := repo.FindByID(r.Context(), agentID)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				server.WriteError(w, http.StatusNotFound, "agent not found")
+				return
+			}
+			slog.Error("agent lookup failed", "error", err)
+			server.WriteError(w, http.StatusInternalServerError, "could not update zone")
+			return
+		}
+
+		if identity.UserID != agent.UserID {
+			server.WriteError(w, http.StatusForbidden, "cannot update another agent's zone")
+			return
+		}
+
+		var req updateZoneRequest
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			server.WriteError(w, http.StatusUnprocessableEntity, "invalid request body")
+			return
+		}
+
+		zoneID := strings.TrimSpace(req.ZoneID)
+		if zoneID == "" {
+			server.WriteError(w, http.StatusUnprocessableEntity, "zone_id is required")
+			return
+		}
+
+		zone, err := zonesRepo.FindZoneByID(r.Context(), zoneID)
+		if err != nil {
+			if errors.Is(err, zones.ErrZoneNotFound) {
+				server.WriteError(w, http.StatusUnprocessableEntity, "zone not found")
+				return
+			}
+			slog.Error("zone lookup failed", "error", err)
+			server.WriteError(w, http.StatusInternalServerError, "could not update zone")
+			return
+		}
+		if !zone.Active {
+			server.WriteError(w, http.StatusUnprocessableEntity, "zone is not active")
+			return
+		}
+
+		updated, err := repo.UpdateZone(r.Context(), agentID, zoneID)
+		if err != nil {
+			if errors.Is(err, ErrInvalidZone) {
+				server.WriteError(w, http.StatusUnprocessableEntity, "zone not found")
+				return
+			}
+			slog.Error("zone update failed", "error", err)
+			server.WriteError(w, http.StatusInternalServerError, "could not update zone")
 			return
 		}
 

@@ -19,17 +19,20 @@ import (
 // The three GET routes are additionally readable by CUSTOMER, a
 // narrow, additive M06 change: a customer placing an order needs to
 // pick a pickup/drop area from a real list, and M04 had no reason to
-// anticipate that read need — nothing else here changes. No mutation
-// route is widened, and internal/zones' Go code (handlers, resolution,
-// repository) is untouched — see docs/zone-management.md's RBAC
-// section for the full reasoning.
+// anticipate that read need. The same three were further widened to
+// DELIVERY_AGENT: an agent needs the zone list to pick their own
+// current_zone_id via PUT /agents/{id}/zone (see internal/agents'
+// UpdateZoneHandler) — same reasoning, same narrow, read-only shape. No
+// mutation route is widened, and internal/zones' Go code (handlers,
+// resolution, repository) is untouched — see docs/zone-management.md's
+// RBAC section for the full reasoning.
 func Mount(repo Repository, jwtSecret string) func(chi.Router) {
 	return func(v1 chi.Router) {
 		adminOnly := func(r chi.Router) chi.Router {
 			return r.With(auth.RequireAuth(jwtSecret), auth.RequireRole(users.RoleAdmin))
 		}
 		readOnly := func(r chi.Router) chi.Router {
-			return r.With(auth.RequireAuth(jwtSecret), auth.RequireRole(users.RoleAdmin, users.RoleCustomer))
+			return r.With(auth.RequireAuth(jwtSecret), auth.RequireRole(users.RoleAdmin, users.RoleCustomer, users.RoleDeliveryAgent))
 		}
 
 		adminOnly(v1).Post("/zones", CreateZoneHandler(repo))

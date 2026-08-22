@@ -61,7 +61,7 @@ func setupAssignmentTest(t *testing.T) (router http.Handler, usersRepo users.Rep
 		rates.Mount(rRepo, zRepo, agentsIntegrationJWTSecret),
 		orders.Mount(oRepo, uRepo, zRepo, rRepo, aRepo, agentsIntegrationJWTSecret, nil),
 		tracking.Mount(tRepo, agentsIntegrationJWTSecret, nil),
-		agents.Mount(aRepo, agentsIntegrationJWTSecret),
+		agents.Mount(aRepo, zRepo, agentsIntegrationJWTSecret),
 		assignment.Mount(asRepo, agentsIntegrationJWTSecret),
 	)
 	return r, uRepo, zRepo, aRepo, p

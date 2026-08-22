@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { ApiError } from './api'
-import { createAgent, listAgents, updateAgentAvailability, updateAgentLocation } from './agents'
+import { createAgent, listAgents, updateAgentAvailability, updateAgentLocation, updateAgentZone } from './agents'
 
 function jsonResponse(status: number, body: unknown): Response {
   return { ok: status >= 200 && status < 300, status, json: async () => body } as Response
@@ -77,5 +77,23 @@ describe('agents service', () => {
     )
 
     await expect(updateAgentLocation('agent-token', 'someone-elses-id', 1, 2)).rejects.toMatchObject({ status: 403 })
+  })
+
+  it('updateAgentZone PUTs zone_id to the zone endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { id: 'a1', current_zone_id: 'zone-1' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await updateAgentZone('agent-token', 'a1', 'zone-1')
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(path).toBe('/api/v1/agents/a1/zone')
+    expect(init.method).toBe('PUT')
+    expect(init.body).toBe(JSON.stringify({ zone_id: 'zone-1' }))
+  })
+
+  it('updateAgentZone surfaces a 422 for an unknown zone', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(422, { error: 'zone not found' })))
+
+    await expect(updateAgentZone('agent-token', 'a1', 'bad-zone')).rejects.toMatchObject({ status: 422 })
   })
 })

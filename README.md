@@ -71,8 +71,19 @@ assignment's own "free-tier service" wording. Addressed:
 - **`docs/deployment.md`** — the concrete deployment guide tying CORS,
   the base-URL config, and both platforms' required environment
   variables together, plus how to verify a live deployment.
+- **`PUT /api/v1/agents/{id}/zone`** — a real functional gap, not a
+  polish item: `current_zone_id` (the column M09's
+  `assignment.IsEligible` requires to be non-nil) had *no application
+  write path at all* until this endpoint, so no real delivery agent
+  using the app could ever become eligible for auto-assignment. A plain
+  dropdown of real zones (`GET /zones`, read-RBAC widened to
+  `DELIVERY_AGENT`), not GPS-derived — there is no zone/area boundary
+  geometry anywhere in this schema, and no order pickup coordinate
+  either, so true geofencing was never computable here (see
+  `docs/assignment-engine.md`). `internal/assignment/candidate.go`
+  (M09, frozen) is untouched.
 
-None of this touched `internal/tracking`, `internal/assignment`,
+None of this touched `internal/tracking`, `internal/assignment/candidate.go`,
 `internal/rescheduling`, or `internal/notifications`' own dispatch/
 idempotency logic — see the Evaluation Matrix for the full evidence
 trail.
@@ -405,6 +416,15 @@ endpoint examples are in [`docs/api.md`](docs/api.md). Short version:
   even ADMIN) sets current latitude/longitude — validated (±90/±180,
   finite), with `location_updated_at` always set from the database's own
   clock, never a client-supplied timestamp.
+- **`PUT /api/v1/agents/{id}/zone`** (the agent themselves only) sets
+  `current_zone_id` — the column M09's `assignment.IsEligible` requires
+  to be non-nil. Until this endpoint existed, nothing in the application
+  ever wrote to it (only direct SQL, in tests and seed data), so no real
+  agent using the app could ever become eligible for auto-assignment.
+  Validates the zone is real and active via `zones.Repository` before
+  writing (`422` otherwise) — a plain dropdown, not a location derived
+  from lat/lng, since there's no zone-boundary geometry anywhere in this
+  schema to geofence against. See `docs/user-agent-management.md`.
 
 Every agent-management write is protected twice: a route-level role gate,
 then a handler-level ownership check comparing the caller's own user ID
@@ -1065,3 +1085,4 @@ Grows with each module.
 | CI: backend fmt/vet/build/unit/integration/e2e + frontend tsc/lint/test/build on every push/PR | `.github/workflows/ci.yml` | the workflow itself, run on GitHub | `README.md` |
 | OpenAPI document cannot silently drift from the real router | `backend/tests/e2e/openapi_contract_test.go` | `TestOpenAPIContract_DocumentedPathsMatchRealRoutes` (`-tags=e2e`) | `docs/openapi.yaml` |
 | Supporting indexes on every column the M12 order filter can query | `backend/migrations/0013_add_order_filter_indexes.sql` | verified present via `\d orders` against a fresh database | `README.md` |
+| `current_zone_id` write path — a real agent can now become eligible for auto-assignment via the app itself, not just direct SQL | `backend/internal/agents/handler.go` (`UpdateZoneHandler`), `routes.go`, `repository.go` | `TestUpdateZoneHandler_*` (unit), `TestUpdateAgentZone_*` (integration), live-verified against a running container (success, unknown-zone 422, admin-forbidden 403) | `docs/user-agent-management.md` |

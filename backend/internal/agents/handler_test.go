@@ -3,6 +3,7 @@ package agents
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 
 	"lastmiletracker/internal/auth"
 	"lastmiletracker/internal/users"
+	"lastmiletracker/internal/zones"
 )
 
 const testSecret = "agents-test-secret"
@@ -99,6 +101,71 @@ func (f *fakeRepo) UpdateLocation(_ context.Context, id string, lat, lng float64
 	a.LocationUpdatedAt = &now
 	f.byID[id] = a
 	return a, nil
+}
+
+func (f *fakeRepo) UpdateZone(_ context.Context, id, zoneID string) (AgentWithUser, error) {
+	a, ok := f.byID[id]
+	if !ok {
+		return AgentWithUser{}, ErrNotFound
+	}
+	a.CurrentZoneID = &zoneID
+	f.byID[id] = a
+	return a, nil
+}
+
+// fakeZonesRepo is a minimal in-memory zones.Repository for
+// UpdateZoneHandler's unit tests — this package's own copy rather than
+// reaching into internal/zones' unexported test fakes, the same
+// convention internal/orders and internal/rates each follow for their
+// own fakeZonesRepo.
+type fakeZonesRepo struct {
+	byID map[string]zones.Zone
+}
+
+func newFakeZonesRepo() *fakeZonesRepo {
+	return &fakeZonesRepo{byID: map[string]zones.Zone{}}
+}
+
+func (f *fakeZonesRepo) seed(id string, active bool) zones.Zone {
+	z := zones.Zone{ID: id, Name: id, Active: active, CreatedAt: time.Now()}
+	f.byID[id] = z
+	return z
+}
+
+func (f *fakeZonesRepo) CreateZone(_ context.Context, input zones.CreateZoneInput) (zones.Zone, error) {
+	return zones.Zone{}, errors.New("not implemented in fake")
+}
+
+func (f *fakeZonesRepo) ListZones(_ context.Context) ([]zones.Zone, error) {
+	return nil, errors.New("not implemented in fake")
+}
+
+func (f *fakeZonesRepo) FindZoneByID(_ context.Context, id string) (zones.Zone, error) {
+	z, ok := f.byID[id]
+	if !ok {
+		return zones.Zone{}, zones.ErrZoneNotFound
+	}
+	return z, nil
+}
+
+func (f *fakeZonesRepo) UpdateZone(_ context.Context, id string, update zones.ZoneUpdate) (zones.Zone, error) {
+	return zones.Zone{}, errors.New("not implemented in fake")
+}
+
+func (f *fakeZonesRepo) CreateArea(_ context.Context, zoneID string, input zones.CreateAreaInput) (zones.Area, error) {
+	return zones.Area{}, errors.New("not implemented in fake")
+}
+
+func (f *fakeZonesRepo) ListAreasByZone(_ context.Context, zoneID string) ([]zones.Area, error) {
+	return nil, errors.New("not implemented in fake")
+}
+
+func (f *fakeZonesRepo) FindAreaByID(_ context.Context, id string) (zones.Area, error) {
+	return zones.Area{}, errors.New("not implemented in fake")
+}
+
+func (f *fakeZonesRepo) UpdateArea(_ context.Context, areaID string, update zones.AreaUpdate) (zones.Area, error) {
+	return zones.Area{}, errors.New("not implemented in fake")
 }
 
 // doRequest builds a request with optional chi URL params (for handlers
@@ -490,6 +557,115 @@ func TestUpdateLocationHandler_ZeroZeroIsValid(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusOK)
+	}
+}
+
+// --- UpdateZone ---
+
+func TestUpdateZoneHandler_OwnAgentSucceeds(t *testing.T) {
+	repo := newFakeRepo()
+	created, err := repo.Create(context.Background(), CreateAgentInput{Email: "zone1@example.com", FullName: "Zone1"})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+	zRepo := newFakeZonesRepo()
+	zone := zRepo.seed("zone-1", true)
+
+	handler := withAuth(t, created.UserID, users.RoleDeliveryAgent, UpdateZoneHandler(repo, zRepo))
+	rec := doRequest(t, handler, http.MethodPut, "/api/v1/agents/"+created.ID+"/zone",
+		fmt.Sprintf(`{"zone_id":%q}`, zone.ID), map[string]string{"id": created.ID})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	body := decodeJSON[map[string]any](t, rec)
+	if body["current_zone_id"] != zone.ID {
+		t.Errorf("current_zone_id = %v, want %v", body["current_zone_id"], zone.ID)
+	}
+}
+
+func TestUpdateZoneHandler_AnotherAgentForbidden(t *testing.T) {
+	repo := newFakeRepo()
+	agentA, err := repo.Create(context.Background(), CreateAgentInput{Email: "zonea@example.com", FullName: "A"})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+	agentB, err := repo.Create(context.Background(), CreateAgentInput{Email: "zoneb@example.com", FullName: "B"})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+	zRepo := newFakeZonesRepo()
+	zone := zRepo.seed("zone-2", true)
+
+	handler := withAuth(t, agentA.UserID, users.RoleDeliveryAgent, UpdateZoneHandler(repo, zRepo))
+	rec := doRequest(t, handler, http.MethodPut, "/api/v1/agents/"+agentB.ID+"/zone",
+		fmt.Sprintf(`{"zone_id":%q}`, zone.ID), map[string]string{"id": agentB.ID})
+
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+}
+
+func TestUpdateZoneHandler_UnknownZoneRejected(t *testing.T) {
+	repo := newFakeRepo()
+	created, err := repo.Create(context.Background(), CreateAgentInput{Email: "zone3@example.com", FullName: "Zone3"})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+	zRepo := newFakeZonesRepo()
+
+	handler := withAuth(t, created.UserID, users.RoleDeliveryAgent, UpdateZoneHandler(repo, zRepo))
+	rec := doRequest(t, handler, http.MethodPut, "/api/v1/agents/"+created.ID+"/zone",
+		`{"zone_id":"does-not-exist"}`, map[string]string{"id": created.ID})
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+}
+
+func TestUpdateZoneHandler_InactiveZoneRejected(t *testing.T) {
+	repo := newFakeRepo()
+	created, err := repo.Create(context.Background(), CreateAgentInput{Email: "zone4@example.com", FullName: "Zone4"})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+	zRepo := newFakeZonesRepo()
+	zone := zRepo.seed("zone-4", false)
+
+	handler := withAuth(t, created.UserID, users.RoleDeliveryAgent, UpdateZoneHandler(repo, zRepo))
+	rec := doRequest(t, handler, http.MethodPut, "/api/v1/agents/"+created.ID+"/zone",
+		fmt.Sprintf(`{"zone_id":%q}`, zone.ID), map[string]string{"id": created.ID})
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+}
+
+func TestUpdateZoneHandler_MissingZoneIDRejected(t *testing.T) {
+	repo := newFakeRepo()
+	created, err := repo.Create(context.Background(), CreateAgentInput{Email: "zone5@example.com", FullName: "Zone5"})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+	zRepo := newFakeZonesRepo()
+
+	handler := withAuth(t, created.UserID, users.RoleDeliveryAgent, UpdateZoneHandler(repo, zRepo))
+	rec := doRequest(t, handler, http.MethodPut, "/api/v1/agents/"+created.ID+"/zone",
+		`{}`, map[string]string{"id": created.ID})
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+}
+
+func TestUpdateZoneHandler_UnauthenticatedReturns401(t *testing.T) {
+	repo := newFakeRepo()
+	zRepo := newFakeZonesRepo()
+	rec := doRequest(t, UpdateZoneHandler(repo, zRepo), http.MethodPut, "/api/v1/agents/some-id/zone",
+		`{"zone_id":"zone-1"}`, map[string]string{"id": "some-id"})
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }
 

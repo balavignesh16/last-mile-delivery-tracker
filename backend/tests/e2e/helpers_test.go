@@ -106,7 +106,7 @@ func setupE2E(t *testing.T) (router chi.Router, pool *pgxpool.Pool, notifyCount 
 
 	r := server.NewRouter(p, logger,
 		auth.Mount(usersRepo, e2eJWTSecret),
-		agents.Mount(agentsRepo, e2eJWTSecret),
+		agents.Mount(agentsRepo, zonesRepo, e2eJWTSecret),
 		zones.Mount(zonesRepo, e2eJWTSecret),
 		rates.Mount(ratesRepo, zonesRepo, e2eJWTSecret),
 		orders.Mount(ordersRepo, usersRepo, zonesRepo, ratesRepo, agentsRepo, e2eJWTSecret, notificationsService.NotifyOrderCreated),

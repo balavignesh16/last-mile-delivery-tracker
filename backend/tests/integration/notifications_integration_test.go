@@ -157,7 +157,7 @@ func setupNotificationsTest(t *testing.T) (router http.Handler, usersRepo users.
 		rates.Mount(rRepo, zRepo, agentsIntegrationJWTSecret),
 		orders.Mount(oRepo, uRepo, zRepo, rRepo, aRepo, agentsIntegrationJWTSecret, nSvc.NotifyOrderCreated),
 		tracking.Mount(tRepo, agentsIntegrationJWTSecret, nSvc.NotifyTransition),
-		agents.Mount(aRepo, agentsIntegrationJWTSecret),
+		agents.Mount(aRepo, zRepo, agentsIntegrationJWTSecret),
 		assignment.Mount(asRepo, agentsIntegrationJWTSecret),
 		rescheduling.Mount(rsRepo, oRepo, agentsIntegrationJWTSecret),
 	)

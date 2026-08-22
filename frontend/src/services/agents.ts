@@ -25,3 +25,7 @@ export function updateAgentLocation(
 ): Promise<Agent> {
   return apiPut<Agent>(`/api/v1/agents/${agentId}/location`, { latitude, longitude }, token)
 }
+
+export function updateAgentZone(token: string, agentId: string, zoneId: string): Promise<Agent> {
+  return apiPut<Agent>(`/api/v1/agents/${agentId}/zone`, { zone_id: zoneId }, token)
+}

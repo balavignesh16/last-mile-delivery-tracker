@@ -145,14 +145,22 @@ The three **read** endpoints (`GET /zones`, `GET /zones/{id}`, `GET
 /zones/{zoneID}/areas`) additionally admit `CUSTOMER`, a narrow M06
 change: a customer requesting a quote needs to pick a real pickup/drop
 area from a list, and M04 had no reason to anticipate that read need at
-the time. No mutation route was widened, and none of this module's Go
-code (handlers, resolution, repository) changed — only the RBAC
-middleware list in `routes.go`'s three `GET` registrations. See
-`docs/rate-calculation.md` for why this was necessary rather than
-optional.
+the time. See `docs/rate-calculation.md` for why this was necessary
+rather than optional.
 
-`DELIVERY_AGENT` gets `403` on every endpoint in this module, mutation
-or read; unauthenticated requests get `401` everywhere. Verified in
+The same three reads were further widened to admit `DELIVERY_AGENT`: an
+agent needs the zone list to pick their own `current_zone_id` via `PUT
+/agents/{id}/zone` (see `docs/user-agent-management.md`) — the endpoint
+that closes the gap where `current_zone_id`, the column M09's
+`assignment.IsEligible` requires, had no application write path at all.
+Same shape as the M06 widening: no mutation route touched, no Go code in
+this module's handlers/resolution/repository changed — only the RBAC
+middleware list in `routes.go`'s three `GET` registrations grew one more
+role.
+
+`DELIVERY_AGENT` still gets `403` on every **mutation** endpoint in this
+module (zone/area management stays `ADMIN`-only); unauthenticated
+requests get `401` everywhere. Verified in
 `tests/integration/zones_integration_test.go`
 (`TestZoneEndpoints_RoleGating`, `TestAreaEndpoints_RoleGating`,
 `TestAreaEndpoints_GetRoleGating`).

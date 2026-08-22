@@ -18,14 +18,17 @@ import (
 	"lastmiletracker/internal/database"
 	"lastmiletracker/internal/server"
 	"lastmiletracker/internal/users"
+	"lastmiletracker/internal/zones"
 )
 
 const agentsIntegrationJWTSecret = "agents-integration-test-secret"
 
 // setupAgentsTest builds the exact same router main.go builds — real
-// Postgres, real migrations, real middleware, both auth.Mount and
-// agents.Mount — so these tests exercise the full stack.
-func setupAgentsTest(t *testing.T) (router http.Handler, usersRepo users.Repository, agentsRepo agents.Repository) {
+// Postgres, real migrations, real middleware, auth.Mount, agents.Mount,
+// and zones.Mount (agents.Mount now depends on zones.Repository for
+// UpdateZoneHandler's zone-exists/active check) — so these tests
+// exercise the full stack.
+func setupAgentsTest(t *testing.T) (router http.Handler, usersRepo users.Repository, agentsRepo agents.Repository, zonesRepo zones.Repository) {
 	t.Helper()
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {
@@ -45,11 +48,13 @@ func setupAgentsTest(t *testing.T) (router http.Handler, usersRepo users.Reposit
 
 	uRepo := users.NewPostgresRepository(pool)
 	aRepo := agents.NewPostgresRepository(pool)
+	zRepo := zones.NewPostgresRepository(pool)
 	r := server.NewRouter(pool, testLogger(),
 		auth.Mount(uRepo, agentsIntegrationJWTSecret),
-		agents.Mount(aRepo, agentsIntegrationJWTSecret),
+		agents.Mount(aRepo, zRepo, agentsIntegrationJWTSecret),
+		zones.Mount(zRepo, agentsIntegrationJWTSecret),
 	)
-	return r, uRepo, aRepo
+	return r, uRepo, aRepo, zRepo
 }
 
 func adminToken(t *testing.T, uRepo users.Repository) string {
@@ -93,7 +98,7 @@ func doJSON(router http.Handler, method, path, token, body string) *httptest.Res
 }
 
 func TestAgentFlow_AdminCreatesListsAndManagesAgent(t *testing.T) {
-	router, uRepo, _ := setupAgentsTest(t)
+	router, uRepo, _, zRepo := setupAgentsTest(t)
 	admin := adminToken(t, uRepo)
 	email := uniqueEmail("agent-flow")
 
@@ -172,10 +177,123 @@ func TestAgentFlow_AdminCreatesListsAndManagesAgent(t *testing.T) {
 	if locBody["location_updated_at"] == nil {
 		t.Error("expected location_updated_at to be set")
 	}
+
+	// 6. The agent sets their own current operating zone — the only
+	// write path in the application for current_zone_id, the column
+	// assignment.IsEligible requires to be non-nil.
+	zone, err := zRepo.CreateZone(context.Background(), zones.CreateZoneInput{Name: uniqueEmail("agent-flow-zone")})
+	if err != nil {
+		t.Fatalf("CreateZone() error: %v", err)
+	}
+	zoneRec := doJSON(router, http.MethodPut, "/api/v1/agents/"+agentID+"/zone", agentToken, fmt.Sprintf(`{"zone_id":%q}`, zone.ID))
+	if zoneRec.Code != http.StatusOK {
+		t.Fatalf("zone update status = %d, want %d, body: %s", zoneRec.Code, http.StatusOK, zoneRec.Body.String())
+	}
+	var zoneBody map[string]any
+	if err := json.NewDecoder(zoneRec.Body).Decode(&zoneBody); err != nil {
+		t.Fatalf("decode zone response: %v", err)
+	}
+	if zoneBody["current_zone_id"] != zone.ID {
+		t.Errorf("current_zone_id = %v, want %v", zoneBody["current_zone_id"], zone.ID)
+	}
+}
+
+func TestUpdateAgentZone_RejectsUnknownZone(t *testing.T) {
+	router, uRepo, _, _ := setupAgentsTest(t)
+	admin := adminToken(t, uRepo)
+	agentID, agentToken := createAgentWithToken(t, router, uRepo, admin)
+
+	rec := doJSON(router, http.MethodPut, "/api/v1/agents/"+agentID+"/zone", agentToken, `{"zone_id":"00000000-0000-0000-0000-000000000000"}`)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("status = %d, want %d, body: %s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
+	}
+}
+
+func TestUpdateAgentZone_RejectsInactiveZone(t *testing.T) {
+	router, uRepo, _, zRepo := setupAgentsTest(t)
+	admin := adminToken(t, uRepo)
+	agentID, agentToken := createAgentWithToken(t, router, uRepo, admin)
+
+	zone, err := zRepo.CreateZone(context.Background(), zones.CreateZoneInput{Name: uniqueEmail("inactive-zone")})
+	if err != nil {
+		t.Fatalf("CreateZone() error: %v", err)
+	}
+	inactive := false
+	if _, err := zRepo.UpdateZone(context.Background(), zone.ID, zones.ZoneUpdate{Name: zone.Name, Active: &inactive}); err != nil {
+		t.Fatalf("UpdateZone() error: %v", err)
+	}
+
+	rec := doJSON(router, http.MethodPut, "/api/v1/agents/"+agentID+"/zone", agentToken, fmt.Sprintf(`{"zone_id":%q}`, zone.ID))
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("status = %d, want %d, body: %s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
+	}
+}
+
+func TestUpdateAgentZone_CannotUpdateAnotherAgentsZone(t *testing.T) {
+	router, uRepo, _, zRepo := setupAgentsTest(t)
+	admin := adminToken(t, uRepo)
+	agentID, _ := createAgentWithToken(t, router, uRepo, admin)
+	_, otherToken := createAgentWithToken(t, router, uRepo, admin)
+
+	zone, err := zRepo.CreateZone(context.Background(), zones.CreateZoneInput{Name: uniqueEmail("idor-zone")})
+	if err != nil {
+		t.Fatalf("CreateZone() error: %v", err)
+	}
+
+	rec := doJSON(router, http.MethodPut, "/api/v1/agents/"+agentID+"/zone", otherToken, fmt.Sprintf(`{"zone_id":%q}`, zone.ID))
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want %d, body: %s", rec.Code, http.StatusForbidden, rec.Body.String())
+	}
+}
+
+func TestUpdateAgentZone_RoleGating(t *testing.T) {
+	router, uRepo, _, zRepo := setupAgentsTest(t)
+	admin := adminToken(t, uRepo)
+	customer := customerToken(t, uRepo)
+	agentID, _ := createAgentWithToken(t, router, uRepo, admin)
+
+	zone, err := zRepo.CreateZone(context.Background(), zones.CreateZoneInput{Name: uniqueEmail("role-gating-zone")})
+	if err != nil {
+		t.Fatalf("CreateZone() error: %v", err)
+	}
+	body := fmt.Sprintf(`{"zone_id":%q}`, zone.ID)
+
+	if rec := doJSON(router, http.MethodPut, "/api/v1/agents/"+agentID+"/zone", admin, body); rec.Code != http.StatusForbidden {
+		t.Errorf("admin: status = %d, want %d (not even ADMIN may set an agent's zone — same as location)", rec.Code, http.StatusForbidden)
+	}
+	if rec := doJSON(router, http.MethodPut, "/api/v1/agents/"+agentID+"/zone", customer, body); rec.Code != http.StatusForbidden {
+		t.Errorf("customer: status = %d, want %d", rec.Code, http.StatusForbidden)
+	}
+	if rec := doJSON(router, http.MethodPut, "/api/v1/agents/"+agentID+"/zone", "", body); rec.Code != http.StatusUnauthorized {
+		t.Errorf("unauthenticated: status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+// createAgentWithToken provisions an agent via the real endpoint and
+// returns its agent id plus a usable DELIVERY_AGENT token for it —
+// shared setup for the zone-update tests above.
+func createAgentWithToken(t *testing.T, router http.Handler, uRepo users.Repository, admin string) (agentID, token string) {
+	t.Helper()
+	createRec := doJSON(router, http.MethodPost, "/api/v1/agents", admin,
+		fmt.Sprintf(`{"email":%q,"password":"password123","full_name":"Zone Test Agent"}`, uniqueEmail("zone-agent")))
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("setup: create agent status = %d, want %d, body: %s", createRec.Code, http.StatusCreated, createRec.Body.String())
+	}
+	var created map[string]any
+	if err := json.NewDecoder(createRec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	agentID = created["id"].(string)
+	userID := created["user_id"].(string)
+	agentToken, err := auth.GenerateToken(agentsIntegrationJWTSecret, userID, users.RoleDeliveryAgent, time.Hour)
+	if err != nil {
+		t.Fatalf("GenerateToken() error: %v", err)
+	}
+	return agentID, agentToken
 }
 
 func TestCreateAgent_RoleGating(t *testing.T) {
-	router, uRepo, _ := setupAgentsTest(t)
+	router, uRepo, _, _ := setupAgentsTest(t)
 	admin := adminToken(t, uRepo)
 	customer := customerToken(t, uRepo)
 
@@ -201,7 +319,7 @@ func TestCreateAgent_RoleGating(t *testing.T) {
 }
 
 func TestCreateAgent_DeliveryAgentCannotCreateAnotherAgent(t *testing.T) {
-	router, uRepo, _ := setupAgentsTest(t)
+	router, uRepo, _, _ := setupAgentsTest(t)
 	admin := adminToken(t, uRepo)
 
 	// Provision one agent via the real endpoint, then try to use that
@@ -230,7 +348,7 @@ func TestCreateAgent_DeliveryAgentCannotCreateAnotherAgent(t *testing.T) {
 }
 
 func TestListAgents_RoleGating(t *testing.T) {
-	router, uRepo, _ := setupAgentsTest(t)
+	router, uRepo, _, _ := setupAgentsTest(t)
 	admin := adminToken(t, uRepo)
 	customer := customerToken(t, uRepo)
 
@@ -246,7 +364,7 @@ func TestListAgents_RoleGating(t *testing.T) {
 }
 
 func TestUpdateProfile_DoesNotAffectRole(t *testing.T) {
-	router, uRepo, _ := setupAgentsTest(t)
+	router, uRepo, _, _ := setupAgentsTest(t)
 	customer := customerToken(t, uRepo)
 
 	rec := doJSON(router, http.MethodPut, "/api/v1/users/me", customer, `{"full_name":"Updated Name","phone":"555-0199"}`)
@@ -398,7 +516,7 @@ func TestAgentCreation_TransactionalAtomicity(t *testing.T) {
 	// fails — this proves the transaction actually rolls back (no orphan
 	// delivery_agents row left behind) rather than just proving the
 	// error propagates.
-	router, uRepo, aRepo := setupAgentsTest(t)
+	router, uRepo, aRepo, _ := setupAgentsTest(t)
 	admin := adminToken(t, uRepo)
 	email := uniqueEmail("atomic")
 
@@ -435,7 +553,7 @@ func TestAgentCreation_TransactionalAtomicity(t *testing.T) {
 // seeded demo agent until main.go started calling EnsureDemoAgentRecord
 // right after SeedDemoUsers.
 func TestEnsureDemoAgentRecord_BacksTheSeededDemoAgent(t *testing.T) {
-	router, uRepo, aRepo := setupAgentsTest(t)
+	router, uRepo, aRepo, _ := setupAgentsTest(t)
 
 	if err := auth.SeedDemoUsers(context.Background(), uRepo, testLogger()); err != nil {
 		t.Fatalf("SeedDemoUsers() failed: %v", err)

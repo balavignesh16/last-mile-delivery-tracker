@@ -129,7 +129,7 @@ func main() {
 
 	router := server.NewRouter(pool, logger,
 		auth.Mount(usersRepo, cfg.JWTSecret),
-		agents.Mount(agentsRepo, cfg.JWTSecret),
+		agents.Mount(agentsRepo, zonesRepo, cfg.JWTSecret),
 		zones.Mount(zonesRepo, cfg.JWTSecret),
 		rates.Mount(ratesRepo, zonesRepo, cfg.JWTSecret),
 		orders.Mount(ordersRepo, usersRepo, zonesRepo, ratesRepo, agentsRepo, cfg.JWTSecret, notificationsService.NotifyOrderCreated),

@@ -107,17 +107,58 @@ frontend a way to learn that `id`. `GET /agents/me` closes that gap, the
 same way `GET /users/me` does for identity. `internal/agents.Repository`
 gained a `FindByUserID` method to back it.
 
+## `PUT /api/v1/agents/{id}/zone` — the missing write path for `current_zone_id`
+
+M03 shipped `current_zone_id` as a column M09 would read, but until this
+endpoint existed, **nothing in the application ever wrote to it**. `PUT
+.../location` only ever touched `current_lat`/`current_lng` (see the
+schema comment above and migration `0005`'s own comment, which flags
+this explicitly). Since `assignment.IsEligible` (M09, frozen —
+`internal/assignment/candidate.go` is untouched by this endpoint)
+requires `CurrentZoneID != nil`, the practical effect was that **no
+delivery agent using the real app could ever become eligible for
+auto-assignment** — the only way to populate the column was direct SQL,
+which is exactly how every test fixture and the M09 audit itself did it.
+
+`PUT /api/v1/agents/{id}/zone` closes that gap: `DELIVERY_AGENT`-only,
+self-only (same reasoning as location — no stated operational reason for
+`ADMIN` to set it on an agent's behalf), body `{"zone_id": "<uuid>"}`.
+The handler validates the zone via `zones.Repository.FindZoneByID`
+before writing — rejecting an unknown or **inactive** zone with `422`,
+the same "referenced entity must be real and active" rule
+`rates.CalculateQuote` already enforces for order creation (see
+`docs/rate-calculation.md`) — rather than trusting the foreign key alone
+to surface a clean error. This is `internal/agents`' first dependency on
+`internal/zones` (a new, one-directional edge — `zones` never depends
+back — the same fan-in `internal/orders` already established for
+`agents`/`zones`/`rates` together).
+
+The frontend calls this from the agent's Operations page: a plain
+dropdown populated from `GET /zones` (read access widened to
+`DELIVERY_AGENT` for exactly this purpose — see
+`docs/zone-management.md`), not a location derived from
+`current_lat`/`current_lng`. That's deliberate, not a shortcut: there is
+no zone/area boundary geometry anywhere in this schema (zones and areas
+are plain named rows, no polygons), and no pickup coordinate on an order
+either — only a pickup zone/area — so there is nothing to geofence an
+agent's raw lat/lng against. See `docs/assignment-engine.md`'s
+"Auto-assignment ranking" section for why true geographic ranking was
+never implemented; this endpoint fixes the *reachability* of the
+zone-based ranking that already exists, not that separate, larger gap.
+
 ## Forward compatibility with M09
 
 Fields M09's candidate-selection algorithm will read are already present
 and typed for that purpose: `availability` (constrained to exactly the
-three values M09 will filter on), `active`, `current_zone_id`,
-`current_lat`/`current_lng` (`float64`, matching Haversine-distance
-arithmetic), and `last_assigned_at` (a natural tie-break signal — earliest
-`last_assigned_at` first, for fair round-robin — though M03 does not write
-to this field; that starts in M09). `location_updated_at` is always set
-from the database's own clock (`now()`), never a client-supplied value,
-so it can be trusted later for staleness checks without re-verifying it.
+three values M09 will filter on), `active`, `current_zone_id` (now
+writable — see above), `current_lat`/`current_lng` (`float64`, matching
+Haversine-distance arithmetic, though nothing in this project resolves a
+pickup point against them — see `docs/assignment-engine.md`), and
+`last_assigned_at` (a natural tie-break signal — earliest
+`last_assigned_at` first, for fair round-robin; M03 does not write to
+this field — that's M09's). `location_updated_at` is always set from the
+database's own clock (`now()`), never a client-supplied value, so it can
+be trusted later for staleness checks without re-verifying it.
 
 M03 explicitly does **not** implement: `SELECT ... FOR UPDATE SKIP
 LOCKED`, Haversine ranking, or either assignment path (manual or

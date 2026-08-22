@@ -15,12 +15,15 @@ Written so far:
   flow (M02).
 - [`user-agent-management.md`](./user-agent-management.md) — the
   delivery_agents schema, `active` vs `availability`, transactional agent
-  provisioning, the two-layer IDOR protection on agent endpoints, and
-  M09 forward-compatibility notes (M03).
+  provisioning, the two-layer IDOR protection on agent endpoints, M09
+  forward-compatibility notes, and `PUT /agents/{id}/zone` — the
+  previously-missing write path for `current_zone_id` that makes an
+  agent actually reachable by auto-assignment (M03).
 - [`zone-management.md`](./zone-management.md) — the zones/areas schema
   and hierarchy, why there's no DELETE, address/area resolution and why
   it isn't geocoding, INTRA/INTER determination, inactive-zone behavior,
-  and completing the `delivery_agents.current_zone_id` foreign key (M04).
+  completing the `delivery_agents.current_zone_id` foreign key, and the
+  read-RBAC widening to `DELIVERY_AGENT` (M04).
 - [`rate-configuration.md`](./rate-configuration.md) — the rate_cards/
   rate_card_slabs schema, why cards start inactive, flat-per-band
   pricing, the `[min, max)` boundary convention, why slabs (unlike every

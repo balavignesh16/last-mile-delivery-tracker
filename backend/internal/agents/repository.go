@@ -6,14 +6,30 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"lastmiletracker/internal/users"
 )
 
+// postgresForeignKeyViolation is a PostgreSQL SQLSTATE. See
+// https://www.postgresql.org/docs/current/errcodes-appendix.html — same
+// constant internal/zones defines for itself rather than exporting one,
+// since each package owns its own error mapping for constraints on its
+// own tables.
+const postgresForeignKeyViolation = "23503"
+
 // ErrNotFound is returned when no delivery_agents row matches the given
 // ID.
 var ErrNotFound = errors.New("agent not found")
+
+// ErrInvalidZone is returned when the given zone_id doesn't reference a
+// real zone. UpdateZoneHandler already checks the zone exists (and is
+// active) via zones.Repository before calling UpdateZone, so this is
+// defense-in-depth — the current_zone_id foreign key should never
+// actually fire in practice, same reasoning as zones.CreateArea's
+// ErrZoneNotFound mapping.
+var ErrInvalidZone = errors.New("zone not found")
 
 // Repository is the storage interface agent handlers depend on. Every
 // method returns the same joined AgentWithUser shape for response-mapping
@@ -30,6 +46,11 @@ type Repository interface {
 	FindByUserID(ctx context.Context, userID string) (AgentWithUser, error)
 	UpdateAvailability(ctx context.Context, id string, availability Availability) (AgentWithUser, error)
 	UpdateLocation(ctx context.Context, id string, lat, lng float64) (AgentWithUser, error)
+	// UpdateZone sets current_zone_id — the column assignment.IsEligible
+	// actually reads. It is the only write path for that column in this
+	// application; see docs/user-agent-management.md for why it was
+	// missing until now.
+	UpdateZone(ctx context.Context, id, zoneID string) (AgentWithUser, error)
 }
 
 type PostgresRepository struct {
@@ -154,6 +175,25 @@ func (r *PostgresRepository) UpdateLocation(ctx context.Context, id string, lat,
 	)
 	if err != nil {
 		return AgentWithUser{}, fmt.Errorf("update location: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return AgentWithUser{}, ErrNotFound
+	}
+	return r.FindByID(ctx, id)
+}
+
+// UpdateZone sets current_zone_id to a caller-supplied zone id. The
+// caller (UpdateZoneHandler) already validated the zone exists and is
+// active via zones.Repository — the foreign-key mapping below is
+// defense-in-depth, not the primary check.
+func (r *PostgresRepository) UpdateZone(ctx context.Context, id, zoneID string) (AgentWithUser, error) {
+	tag, err := r.pool.Exec(ctx, `UPDATE delivery_agents SET current_zone_id = $1 WHERE id = $2`, zoneID, id)
+	if err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == postgresForeignKeyViolation {
+			return AgentWithUser{}, ErrInvalidZone
+		}
+		return AgentWithUser{}, fmt.Errorf("update zone: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return AgentWithUser{}, ErrNotFound
