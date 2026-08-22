@@ -5,6 +5,7 @@ import { Layout } from '../components/Layout'
 import { StatusBadge } from '../components/StatusBadge'
 import { useAuth } from '../hooks/useAuth'
 import { ApiError } from '../services/api'
+import { dashboardPathForRole } from '../utils/role'
 
 const ROLE_LABELS: Record<string, string> = {
   CUSTOMER: 'Customer',
@@ -51,7 +52,11 @@ export function Account() {
 
   return (
     <Layout>
-      <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+      <Link to={dashboardPathForRole(user.role)} className="text-sm text-slate-500 hover:text-slate-800">
+        ← Back to dashboard
+      </Link>
+
+      <div className="mt-4 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-semibold">My Account</h1>
           {/* Role is displayed, never an editable field — the backend
@@ -115,46 +120,36 @@ export function Account() {
 
       {(user.role === 'ADMIN' || user.role === 'CUSTOMER') && (
         <div className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-          <h2 className="text-sm font-semibold text-slate-700">Deliveries</h2>
-          <p className="mt-1 space-x-4 text-sm text-slate-500">
-            <Link to="/quote" className="font-medium text-slate-900 underline">
+          <h2 className="text-sm font-semibold text-slate-700">Quick links</h2>
+          <p className="mt-2 flex flex-wrap gap-x-4 gap-y-2 text-sm">
+            <Link to="/quote" className="font-medium text-brand-600 hover:text-brand-700">
               Get a delivery quote
             </Link>
-            <Link to="/orders/new" className="font-medium text-slate-900 underline">
+            <Link to="/orders/new" className="font-medium text-brand-600 hover:text-brand-700">
               Place an order
             </Link>
-            <Link to="/orders" className="font-medium text-slate-900 underline">
+            <Link to="/orders" className="font-medium text-brand-600 hover:text-brand-700">
               {user.role === 'ADMIN' ? 'View all orders' : 'View my orders'}
             </Link>
-          </p>
-        </div>
-      )}
-
-      {user.role === 'ADMIN' && (
-        <div className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-          <h2 className="text-sm font-semibold text-slate-700">Admin</h2>
-          <p className="mt-1 text-sm text-slate-500">
-            <Link to="/admin/agents" className="font-medium text-slate-900 underline">
-              Manage delivery agents
-            </Link>
+            {user.role === 'ADMIN' && (
+              <Link to="/admin/agents" className="font-medium text-brand-600 hover:text-brand-700">
+                Manage delivery agents
+              </Link>
+            )}
           </p>
         </div>
       )}
 
       {user.role === 'DELIVERY_AGENT' && (
         <div className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-          <h2 className="text-sm font-semibold text-slate-700">Delivery agent</h2>
-          <p className="mt-1 text-sm text-slate-500">
-            <Link to="/agent" className="font-medium text-slate-900 underline">
+          <h2 className="text-sm font-semibold text-slate-700">Quick links</h2>
+          <p className="mt-2 text-sm">
+            <Link to="/agent" className="font-medium text-brand-600 hover:text-brand-700">
               Manage availability &amp; location
             </Link>
           </p>
         </div>
       )}
-
-      <div className="mt-6 rounded-lg border border-dashed border-slate-300 p-6 text-sm text-slate-500">
-        Order history and delivery dashboards arrive in later modules.
-      </div>
     </Layout>
   )
 }

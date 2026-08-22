@@ -5,7 +5,23 @@ import { Layout } from '../../components/Layout'
 import { useAuth } from '../../hooks/useAuth'
 import { ApiError } from '../../services/api'
 import { listOrders } from '../../services/orders'
-import { ORDER_STATUSES, type Order } from '../../types/order'
+import { ORDER_STATUSES, type Order, type OrderStatus } from '../../types/order'
+
+// A light background tint per status, applied to each stat's wrapping
+// container only — deliberately not touching the <dt>/<dd> pair's own
+// markup or sibling relationship, since
+// TestDashboardPage_ComputesOrderStatisticsFromRealData reads the count
+// via `getByText(status).nextElementSibling`.
+const STAT_ACCENT: Record<OrderStatus, string> = {
+  CREATED: 'bg-slate-50',
+  ASSIGNED: 'bg-blue-50',
+  PICKED_UP: 'bg-blue-50',
+  IN_TRANSIT: 'bg-indigo-50',
+  OUT_FOR_DELIVERY: 'bg-amber-50',
+  DELIVERED: 'bg-emerald-50',
+  FAILED: 'bg-red-50',
+  RESCHEDULED: 'bg-amber-50',
+}
 
 // The ADMIN dashboard (M12) — order statistics computed from real,
 // unfiltered GET /orders data (never hardcoded), plus a thin navigation
@@ -42,20 +58,24 @@ export function DashboardPage() {
 
   return (
     <Layout>
-      <h1 className="text-xl font-semibold">Admin dashboard</h1>
-      <p className="mt-1 text-sm text-slate-600">Operational overview and navigation to every admin capability.</p>
+      <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Admin dashboard</h1>
+      <p className="mt-1 text-sm text-slate-500">Operational overview and navigation to every admin capability.</p>
 
       <div className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
         <h2 className="text-sm font-semibold text-slate-700">Order statistics</h2>
         <ErrorBanner message={error} />
         {orders === null && !error ? (
-          <p className="mt-3 text-sm text-slate-500">Loading…</p>
+          <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+            {ORDER_STATUSES.map((s) => (
+              <div key={s} className="h-16 animate-pulse rounded-md bg-slate-100" />
+            ))}
+          </div>
         ) : (
-          <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-4 text-sm sm:grid-cols-4">
+          <dl className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
             {ORDER_STATUSES.map((status) => (
-              <div key={status}>
-                <dt className="text-slate-500">{status}</dt>
-                <dd className="text-base font-semibold text-slate-900">{counts[status]}</dd>
+              <div key={status} className={`rounded-md px-3 py-2.5 ${STAT_ACCENT[status]}`}>
+                <dt className="text-xs font-medium text-slate-500">{status}</dt>
+                <dd className="mt-0.5 text-xl font-semibold tabular-nums text-slate-900">{counts[status]}</dd>
               </div>
             ))}
           </dl>

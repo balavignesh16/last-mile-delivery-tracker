@@ -40,7 +40,7 @@ function renderProtected(roles?: UserProfile['role'][]) {
     <MemoryRouter initialEntries={['/admin/agents']}>
       <Routes>
         <Route path="/login" element={<div>login page</div>} />
-        <Route path="/app" element={<div>account page</div>} />
+        <Route path="/customer/dashboard" element={<div>customer dashboard page</div>} />
         <Route
           path="/admin/agents"
           element={
@@ -81,10 +81,10 @@ describe('ProtectedRoute', () => {
     expect(screen.getByText('secret content')).toBeTruthy()
   })
 
-  it('redirects to /app when the user lacks the required role', () => {
+  it("redirects to the user's own dashboard when they lack the required role", () => {
     mockAuth('authenticated', customer())
     renderProtected(['ADMIN'])
-    expect(screen.getByText('account page')).toBeTruthy()
+    expect(screen.getByText('customer dashboard page')).toBeTruthy()
     expect(screen.queryByText('secret content')).toBeNull()
   })
 })

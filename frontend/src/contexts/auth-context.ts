@@ -7,8 +7,8 @@ export interface AuthContextValue {
   token: string | null
   user: UserProfile | null
   status: AuthStatus
-  login: (email: string, password: string) => Promise<void>
-  register: (input: RegisterInput) => Promise<void>
+  login: (email: string, password: string) => Promise<UserProfile>
+  register: (input: RegisterInput) => Promise<UserProfile>
   updateProfile: (input: ProfileUpdateInput) => Promise<void>
   logout: () => void
 }

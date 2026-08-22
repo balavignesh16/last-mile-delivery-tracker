@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { Layout } from '../components/Layout'
-import { StatusBadge } from '../components/StatusBadge'
+import { OrderStatusBadge } from '../components/OrderStatusBadge'
 import { useAuth } from '../hooks/useAuth'
 import { listAgents } from '../services/agents'
 import { ApiError } from '../services/api'
@@ -165,22 +165,34 @@ export function OrdersPage() {
         </div>
       )}
 
-      <div className="mt-6 rounded-lg border border-slate-200 bg-white shadow-sm">
+      <div className="mt-6 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
         <ErrorBanner message={error} />
         {loading ? (
-          <p className="px-6 py-4 text-sm text-slate-500">Loading…</p>
+          <div className="space-y-3 p-6">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="h-14 animate-pulse rounded-md bg-slate-100" />
+            ))}
+          </div>
         ) : orders.length === 0 ? (
-          <p className="px-6 py-8 text-center text-sm text-slate-500">{hasActiveFilter ? 'No orders match these filters.' : 'No orders yet.'}</p>
+          <div className="px-6 py-12 text-center">
+            <p className="text-sm font-medium text-slate-700">{hasActiveFilter ? 'No orders match these filters.' : 'No orders yet.'}</p>
+            <p className="mt-1 text-sm text-slate-500">
+              {hasActiveFilter ? 'Try clearing a filter to see more results.' : 'Your orders will appear here once you create a delivery.'}
+            </p>
+          </div>
         ) : (
           <ul>
             {orders.map((o) => (
               <li key={o.id} className="border-t border-slate-100 first:border-t-0">
-                <Link to={`/orders/${o.id}`} className="flex items-center justify-between px-6 py-3 text-sm hover:bg-slate-50">
-                  <span>
+                <Link
+                  to={`/orders/${o.id}`}
+                  className="flex items-center justify-between gap-4 px-6 py-4 text-sm transition-colors hover:bg-slate-50"
+                >
+                  <span className="text-slate-700">
                     {o.order_type} · {o.zone_relationship} · {o.payment_type}
-                    <span className="ml-2 text-slate-400">{formatCurrency(o.final_amount)}</span>
+                    <span className="ml-2 font-medium text-slate-900">{formatCurrency(o.final_amount)}</span>
                   </span>
-                  <StatusBadge label={o.status} state={o.status === 'DELIVERED' ? 'ok' : o.status === 'FAILED' ? 'error' : 'loading'} />
+                  <OrderStatusBadge status={o.status} />
                 </Link>
               </li>
             ))}

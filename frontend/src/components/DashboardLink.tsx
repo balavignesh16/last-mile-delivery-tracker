@@ -9,9 +9,14 @@ export function DashboardLink({ to, title, description }: { to: string; title: s
   return (
     <Link
       to={to}
-      className="block rounded-lg border border-slate-200 bg-white p-4 shadow-sm transition hover:border-slate-300 hover:shadow-md"
+      className="group block rounded-lg border border-slate-200 bg-white p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-brand-200 hover:shadow-md"
     >
-      <h3 className="text-sm font-semibold text-slate-900">{title}</h3>
+      <h3 className="flex items-center justify-between text-sm font-semibold text-slate-900">
+        {title}
+        <span className="text-slate-300 transition-transform group-hover:translate-x-0.5 group-hover:text-brand-500" aria-hidden="true">
+          →
+        </span>
+      </h3>
       <p className="mt-1 text-sm text-slate-500">{description}</p>
     </Link>
   )

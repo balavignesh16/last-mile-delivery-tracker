@@ -16,8 +16,8 @@ export function DashboardPage() {
 
   return (
     <Layout>
-      <h1 className="text-xl font-semibold">{user ? `Welcome, ${user.full_name}` : 'Dashboard'}</h1>
-      <p className="mt-1 text-sm text-slate-600">Create a delivery order, track its journey, and reschedule a failed delivery.</p>
+      <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{user ? `Welcome, ${user.full_name}` : 'Dashboard'}</h1>
+      <p className="mt-1 text-sm text-slate-500">Create a delivery order, track its journey, and reschedule a failed delivery.</p>
 
       <div className="mt-6 grid gap-4 sm:grid-cols-2">
         <DashboardLink to="/orders/new" title="Create order" description="Place a new delivery order and see the exact charge before you confirm it." />

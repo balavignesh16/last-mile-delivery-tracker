@@ -113,7 +113,7 @@ describe('OrderDetailPage', () => {
     expect(screen.getByText('INTER')).toBeTruthy()
     expect(screen.getByText('₹60.00')).toBeTruthy()
     expect(screen.getByText('₹15.00')).toBeTruthy()
-    expect(screen.getByText('CREATED', { selector: 'span' })).toBeTruthy()
+    expect(screen.getByText('Created', { selector: 'span' })).toBeTruthy()
   })
 
   it('shows a not-found message for an order that does not exist or is not owned by the caller', async () => {
@@ -206,7 +206,7 @@ describe('OrderDetailPage', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Mark as ASSIGNED' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Mark as ASSIGNED' }))
 
-    await waitFor(() => expect(screen.getByText('ASSIGNED', { selector: 'span' })).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('Assigned', { selector: 'span' })).toBeTruthy())
 
     const statusCall = fetchMock.mock.calls.find(([url]) => String(url) === '/api/v1/orders/order-1/status')
     expect(statusCall).toBeTruthy()
@@ -427,7 +427,7 @@ describe('OrderDetailPage', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Mark as PICKED_UP' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Mark as PICKED_UP' }))
 
-    await waitFor(() => expect(screen.getByText('PICKED_UP', { selector: 'span' })).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('Picked up', { selector: 'span' })).toBeTruthy())
 
     const statusCall = fetchMock.mock.calls.find(([url]) => String(url) === '/api/v1/orders/order-1/status')
     expect(statusCall).toBeTruthy()

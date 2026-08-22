@@ -15,8 +15,8 @@ export function DashboardPage() {
 
   return (
     <Layout>
-      <h1 className="text-xl font-semibold">{user ? `Welcome, ${user.full_name}` : 'Dashboard'}</h1>
-      <p className="mt-1 text-sm text-slate-600">Manage your assigned deliveries and your own operational status.</p>
+      <h1 className="text-2xl font-semibold tracking-tight text-slate-900">{user ? `Welcome, ${user.full_name}` : 'Dashboard'}</h1>
+      <p className="mt-1 text-sm text-slate-500">Manage your assigned deliveries and your own operational status.</p>
 
       <div className="mt-6 grid gap-4 sm:grid-cols-2">
         <DashboardLink

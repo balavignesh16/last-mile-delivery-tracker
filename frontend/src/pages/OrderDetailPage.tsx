@@ -2,7 +2,7 @@ import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { Layout } from '../components/Layout'
-import { StatusBadge } from '../components/StatusBadge'
+import { OrderStatusBadge } from '../components/OrderStatusBadge'
 import { useAuth } from '../hooks/useAuth'
 import { assignOrder, autoAssignOrder } from '../services/assignment'
 import { ApiError } from '../services/api'
@@ -21,12 +21,6 @@ import { formatCurrency } from '../utils/currency'
 // controls only render in those states so an ADMIN is never shown a
 // button that would just 409.
 const ASSIGNABLE_STATUSES: Order['status'][] = ['CREATED', 'RESCHEDULED']
-
-function badgeState(status: string): 'ok' | 'error' | 'loading' {
-  if (status === 'DELIVERED') return 'ok'
-  if (status === 'FAILED') return 'error'
-  return 'loading'
-}
 
 // GET /orders/{id} returns 404 (never 403) for an order a CUSTOMER
 // doesn't own — this page can't tell "doesn't exist" apart from "isn't
@@ -254,7 +248,7 @@ export function OrderDetailPage() {
           <>
             <div className="flex items-center justify-between">
               <h1 className="text-xl font-semibold">Order {order.id}</h1>
-              <StatusBadge label={order.status} state={badgeState(order.status)} />
+              <OrderStatusBadge status={order.status} />
             </div>
 
             <dl className="mt-6 grid grid-cols-2 gap-x-6 gap-y-4 text-sm sm:grid-cols-3">

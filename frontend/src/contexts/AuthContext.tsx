@@ -49,16 +49,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [token])
 
-  async function login(email: string, password: string) {
+  // Fetches the profile inline (rather than relying on the token-change
+  // effect above, which still also fires and re-confirms the same data)
+  // so the caller can redirect by role immediately, without a second
+  // source of truth for "what role is this user" — it's the same
+  // fetchCurrentUser call the effect would otherwise make, just awaited
+  // here so LoginPage/RegisterPage can act on it right away.
+  async function login(email: string, password: string): Promise<UserProfile> {
     const { token: newToken } = await loginUser({ email, password })
+    const profile = await fetchCurrentUser(newToken)
     sessionStorage.setItem(TOKEN_STORAGE_KEY, newToken)
-    setStatus('loading')
     setToken(newToken)
+    setUser(profile)
+    setStatus('authenticated')
+    return profile
   }
 
-  async function register(input: RegisterInput) {
+  async function register(input: RegisterInput): Promise<UserProfile> {
     await registerUser(input)
-    await login(input.email, input.password)
+    return login(input.email, input.password)
   }
 
   async function updateProfile(input: ProfileUpdateInput) {
