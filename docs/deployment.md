@@ -7,6 +7,19 @@ assume. Nothing below requires a new dependency: the backend already has
 a working `Dockerfile` (used by `docker-compose.yml` today), and the
 frontend already builds to static files via `vite build`.
 
+## Live deployment
+
+This isn't just a guide — it's live:
+
+- **App**: <https://last-mile-delivery-tracker-blush.vercel.app/> (Vercel)
+- **API**: <https://lastmile-backend-pvzk.onrender.com> (Render, web
+  service + free-tier PostgreSQL, same region)
+- **Email**: real, via Resend's free tier (`EMAIL_PROVIDER=resend`) —
+  not the log-based default
+
+The steps below are exactly how it was set up, in case it needs to be
+redeployed or the same pattern reused for a different environment.
+
 ## Why two origins need explicit configuration
 
 In local dev, Vite's own proxy (`frontend/vite.config.ts`) forwards

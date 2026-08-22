@@ -8,6 +8,24 @@ with auto-calculated charges, delivery agents are assigned to orders
 the delivery journey. Built as a Go + PostgreSQL backend behind a REST API,
 with a React + TypeScript frontend, structured as a modular monolith.
 
+## Live Application
+
+- **App**: <https://last-mile-delivery-tracker-blush.vercel.app/>
+- **API**: <https://lastmile-backend-pvzk.onrender.com> (`/health` for a
+  liveness check)
+
+Frontend on Vercel, backend + PostgreSQL on Render — see
+[`docs/deployment.md`](docs/deployment.md) for the full setup (why CORS
+and a build-time API base URL are both required across two origins,
+every environment variable, and how this deployment itself was
+verified). Real email notifications are live via
+[Resend](https://resend.com) (see "Notification Service (M11)" below).
+Demo credentials are in "Authentication" below.
+
+The backend's free-tier instance spins down after inactivity — the
+first request after a quiet period can take 30–60 seconds to wake it
+back up.
+
 ## Current Status
 
 **Post-M12 hardening.** A full audit after M12 (see "Evaluation Matrix"
