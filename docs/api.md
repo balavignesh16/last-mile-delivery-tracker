@@ -4,6 +4,11 @@ All business endpoints are versioned under `/api/v1`. `GET /health` is the
 one exception — infrastructure, not business API, so it stays unversioned
 at the root (see `docs/authentication.md` and the README for why).
 
+A machine-readable, hand-authored OpenAPI 3.0 document mirroring every
+endpoint below exactly is at [`docs/openapi.yaml`](./openapi.yaml) — paste
+it into any OpenAPI viewer (e.g. editor.swagger.io) for interactive,
+evaluator-friendly API inspection.
+
 ## Conventions
 
 - **Auth header**: `Authorization: Bearer <token>` on every endpoint marked "Auth: required".
@@ -458,13 +463,21 @@ sending any of them is rejected outright (`422`, unknown field).
 
 ### `GET /api/v1/orders`
 
-**Auth**: required, **ADMIN, CUSTOMER, or DELIVERY_AGENT** (widened from ADMIN/CUSTOMER by M09). **Purpose**: list orders — every order for `ADMIN`, only the caller's own for `CUSTOMER`, only the orders currently assigned to them for `DELIVERY_AGENT` (never every customer's order). No query-parameter filters (by status or zone) — not in the endpoint list; agent-scoping is implicit in the `DELIVERY_AGENT` role's own view, not a filter any role can pass.
+**Auth**: required, **ADMIN, CUSTOMER, or DELIVERY_AGENT** (widened from ADMIN/CUSTOMER by M09). **Purpose**: list orders — every order for `ADMIN`, only the caller's own for `CUSTOMER`, only the orders currently assigned to them for `DELIVERY_AGENT` (never every customer's order).
+
+**Filtering (M12)**: three optional, independently combinable query parameters, honored for **`ADMIN` only** — `?status=`, `?zone=`, `?agent=`. A `CUSTOMER` or `DELIVERY_AGENT` supplying any of them gets exactly their normal, role-scoped result with the parameters silently ignored; a filter can never widen who a role is allowed to see. `zone` matches an order whose *pickup or drop* zone is the given zone id. An unknown `zone`/`agent` id yields an empty list, not an error — the same convention `GET /orders/{id}` and every other id-scoped lookup in this API already uses. An invalid `status` value is rejected `422`.
 
 ```bash
 curl http://localhost:8080/api/v1/orders -H "Authorization: Bearer $TOKEN"
+
+# ADMIN only — filters combine with AND
+curl "http://localhost:8080/api/v1/orders?status=FAILED&zone=$ZONE_ID&agent=$AGENT_ID" \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
 Response: a JSON array of the same shape `POST /orders` returns, now also carrying `assigned_agent_id` (`null` until M09 assigns an agent).
+
+**Errors**: `401`, `422` (an `ADMIN` caller supplied an unrecognized `status` value).
 
 ### `GET /api/v1/orders/{id}`
 
@@ -664,6 +677,15 @@ and `/auto-assign`, and `POST /orders/:id/reschedule`. None of those
 endpoints' request/response shapes changed for M11. See
 `docs/notifications.md` for the full design.
 
+## Dashboards (M12)
+
+The customer, delivery-agent, and admin dashboards add no new REST
+endpoints of their own — they are a navigation and read-only
+composition layer over the endpoints already documented above, plus the
+`GET /orders` filter parameters documented in the Orders section. See
+`docs/dashboards.md`.
+
 ## What's not here yet
 
-Dashboards — M12. This file grows with each module.
+Nothing — every module through M12 is documented above. This file grows
+with each future module.

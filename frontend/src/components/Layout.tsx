@@ -15,6 +15,12 @@ export function Layout({ children }: { children: ReactNode }) {
           <nav className="flex items-center gap-4 text-sm">
             {status === 'authenticated' && user ? (
               <>
+                <Link
+                  to={user.role === 'ADMIN' ? '/admin/dashboard' : user.role === 'DELIVERY_AGENT' ? '/agent/dashboard' : '/customer/dashboard'}
+                  className="text-slate-600 hover:text-slate-900"
+                >
+                  Dashboard
+                </Link>
                 <Link to="/app" className="text-slate-600 hover:text-slate-900">
                   My Account
                 </Link>

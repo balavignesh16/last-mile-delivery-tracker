@@ -62,3 +62,18 @@ export interface OrderPackageInput {
 export interface AdminOrderPackageInput extends OrderPackageInput {
   customer_id: string
 }
+
+// The optional GET /orders query parameters M12 adds — honored by the
+// backend for ADMIN only (internal/orders/handler.go's parseOrderFilter).
+// All three are independently optional and combinable.
+export interface OrderFilter {
+  status?: OrderStatus
+  zone?: string
+  agent?: string
+}
+
+// The full, ordered status vocabulary — mirrors tracking.Status
+// (internal/tracking/event.go) exactly. Used by the admin dashboard's
+// order-statistics widget and status-filter dropdown so neither ever
+// hardcodes a copy of this list.
+export const ORDER_STATUSES: OrderStatus[] = ['CREATED', 'ASSIGNED', 'PICKED_UP', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DELIVERED', 'FAILED', 'RESCHEDULED']

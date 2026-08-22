@@ -382,9 +382,82 @@ describe('OrderDetailPage', () => {
 
     await waitFor(() => expect(screen.getByText('₹75.00')).toBeTruthy())
     expect(screen.queryByText('Assign delivery agent')).toBeNull()
-    expect(screen.queryByText('Update status')).toBeNull()
     expect(screen.queryByText('Tracking timeline')).toBeNull()
     expect(fetchMock.mock.calls.some(([url]) => String(url) === '/api/v1/orders/order-1/tracking')).toBe(false)
+  })
+
+  // --- M12: DELIVERY_AGENT status-update UI ---
+
+  it('shows only the agent-authorized next-status button to a DELIVERY_AGENT on their assigned order', async () => {
+    mockAuth('DELIVERY_AGENT')
+    const assignedOrder = { ...order, status: 'ASSIGNED', assigned_agent_id: 'agent-1' }
+    vi.stubGlobal('fetch', fetchRouter(404, { error: 'order not found' }, events, assignedOrder))
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByText('Update status')).toBeTruthy())
+    // ASSIGNED -> PICKED_UP is the only edge a DELIVERY_AGENT may
+    // perform from ASSIGNED (internal/tracking/statemachine.go).
+    expect(screen.getByRole('button', { name: 'Mark as PICKED_UP' })).toBeTruthy()
+  })
+
+  it('a DELIVERY_AGENT transition posts to the status endpoint and refreshes the order', async () => {
+    mockAuth('DELIVERY_AGENT')
+    const assignedOrder = { ...order, status: 'ASSIGNED', assigned_agent_id: 'agent-1' }
+    const pickedUpOrder = { ...assignedOrder, status: 'PICKED_UP' }
+    const pickedUpEvents = [...events, { ...events[0], id: 'event-2', previous_status: 'ASSIGNED', new_status: 'PICKED_UP', actor_id: 'agent-1' }]
+
+    let transitioned = false
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/v1/orders/order-1/status' && init?.method === 'POST') {
+        transitioned = true
+        return Promise.resolve(jsonResponse(201, pickedUpEvents[1]))
+      }
+      if (url === '/api/v1/orders/order-1') return Promise.resolve(jsonResponse(200, transitioned ? pickedUpOrder : assignedOrder))
+      // A DELIVERY_AGENT must never call GET /orders/:id/tracking (M08:
+      // ADMIN/CUSTOMER only) — asserting via rejection, not a 404
+      // response, so an accidental call fails this test loudly.
+      return Promise.reject(new Error(`unexpected fetch: ${url}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Mark as PICKED_UP' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Mark as PICKED_UP' }))
+
+    await waitFor(() => expect(screen.getByText('PICKED_UP', { selector: 'span' })).toBeTruthy())
+
+    const statusCall = fetchMock.mock.calls.find(([url]) => String(url) === '/api/v1/orders/order-1/status')
+    expect(statusCall).toBeTruthy()
+    const [, init] = statusCall as [string, RequestInit]
+    expect(JSON.parse(init.body as string)).toEqual({ status: 'PICKED_UP' })
+    expect(fetchMock.mock.calls.some(([url]) => String(url) === '/api/v1/orders/order-1/tracking')).toBe(false)
+  })
+
+  it('shows a role-specific message (not "terminal state") to a DELIVERY_AGENT when the only legal next edge is ADMIN-only', async () => {
+    mockAuth('DELIVERY_AGENT')
+    // FAILED -> RESCHEDULED is a legal edge, but ADMIN-only — an agent
+    // must never see a "terminal state" message (which would be
+    // factually wrong) nor a button they aren't authorized to use.
+    const failedOrder = { ...order, status: 'FAILED', assigned_agent_id: 'agent-1' }
+    vi.stubGlobal('fetch', fetchRouter(404, { error: 'order not found' }, events, failedOrder))
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByText('No status update is available to you for this order right now.')).toBeTruthy())
+    expect(screen.queryByRole('button', { name: /Mark as/ })).toBeNull()
+  })
+
+  it('shows the terminal-state message to a DELIVERY_AGENT for a DELIVERED order', async () => {
+    mockAuth('DELIVERY_AGENT')
+    const deliveredOrder = { ...order, status: 'DELIVERED', assigned_agent_id: 'agent-1' }
+    vi.stubGlobal('fetch', fetchRouter(404, { error: 'order not found' }, events, deliveredOrder))
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByText('This order is in a terminal state — no further transitions are possible.')).toBeTruthy())
   })
 
   // --- M10: rescheduling ---

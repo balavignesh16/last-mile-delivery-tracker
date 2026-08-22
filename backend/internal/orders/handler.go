@@ -15,6 +15,7 @@ import (
 	"lastmiletracker/internal/auth"
 	"lastmiletracker/internal/rates"
 	"lastmiletracker/internal/server"
+	"lastmiletracker/internal/tracking"
 	"lastmiletracker/internal/users"
 	"lastmiletracker/internal/zones"
 )
@@ -250,6 +251,29 @@ func CreateOrderHandler(ordersRepo Repository, usersRepo users.Repository, zones
 	}
 }
 
+// parseOrderFilter reads the optional ?status=&zone=&agent= query
+// parameters ListOrdersHandler honors for ADMIN only. status is
+// validated against tracking.ParseStatus — the single, canonical status
+// vocabulary tracking.Status already owns (see docs/order-tracking.md);
+// orders imports tracking here purely to reuse that one validation
+// function, not to depend on any transition/authorization logic, so
+// M08's own module boundary is unaffected. zone/agent are passed
+// through unvalidated — an id that doesn't exist simply matches no
+// rows, the same "unknown id is an empty result, not an error"
+// convention ListOrdersForAgent/ListOrdersForCustomer already use.
+func parseOrderFilter(r *http.Request) (filter OrderFilter, problem string) {
+	q := r.URL.Query()
+	if status := q.Get("status"); status != "" {
+		if _, ok := tracking.ParseStatus(status); !ok {
+			return OrderFilter{}, "status must be one of CREATED, ASSIGNED, PICKED_UP, IN_TRANSIT, OUT_FOR_DELIVERY, DELIVERED, FAILED, RESCHEDULED"
+		}
+		filter.Status = status
+	}
+	filter.ZoneID = q.Get("zone")
+	filter.AgentID = q.Get("agent")
+	return filter, ""
+}
+
 // ListOrdersHandler handles GET /api/v1/orders (ADMIN + CUSTOMER +
 // DELIVERY_AGENT, since M09). Each role sees a different slice, decided
 // here — never by a client-supplied filter: ADMIN sees every order,
@@ -259,6 +283,13 @@ func CreateOrderHandler(ordersRepo Repository, usersRepo users.Repository, zones
 // solution, as agents.GetMyAgentHandler already solved in M03) — a
 // DELIVERY_AGENT's JWT carries a user id, but assigned_agent_id is
 // keyed by the agent's own id, not their user id.
+//
+// M12 adds optional ?status=&zone=&agent= query parameters, honored
+// only for ADMIN — a CUSTOMER or DELIVERY_AGENT supplying them gets
+// exactly their pre-M12, role-scoped result with the parameters silently
+// ignored, never a widened one; a client-supplied filter can narrow what
+// an ADMIN sees, but it can never be the thing that decides which rows
+// any role is allowed to see at all (see docs/dashboards.md).
 func ListOrdersHandler(repo Repository, agentsRepo agents.Repository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		identity, ok := auth.IdentityFromContext(r.Context())
@@ -271,7 +302,12 @@ func ListOrdersHandler(repo Repository, agentsRepo agents.Repository) http.Handl
 		var err error
 		switch identity.Role {
 		case users.RoleAdmin:
-			list, err = repo.ListAllOrders(r.Context())
+			filter, problem := parseOrderFilter(r)
+			if problem != "" {
+				server.WriteError(w, http.StatusUnprocessableEntity, problem)
+				return
+			}
+			list, err = repo.ListAllOrders(r.Context(), filter)
 		case users.RoleDeliveryAgent:
 			agent, aerr := agentsRepo.FindByUserID(r.Context(), identity.UserID)
 			if aerr != nil {

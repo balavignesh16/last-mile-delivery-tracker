@@ -138,7 +138,7 @@ func (f *fakeOrdersRepo) CreateOrder(_ context.Context, _ orders.CreateOrderInpu
 func (f *fakeOrdersRepo) ListOrdersForCustomer(_ context.Context, _ string) ([]orders.Order, error) {
 	return nil, errors.New("not implemented in fake")
 }
-func (f *fakeOrdersRepo) ListAllOrders(_ context.Context) ([]orders.Order, error) {
+func (f *fakeOrdersRepo) ListAllOrders(_ context.Context, _ orders.OrderFilter) ([]orders.Order, error) {
 	return nil, errors.New("not implemented in fake")
 }
 func (f *fakeOrdersRepo) ListOrdersForAgent(_ context.Context, _ string) ([]orders.Order, error) {

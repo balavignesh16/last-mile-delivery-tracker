@@ -1,3 +1,4 @@
+import type { Role } from './auth'
 import type { OrderStatus } from './order'
 
 // Mirrors backend's tracking.Event exactly (internal/tracking/event.go).
@@ -36,4 +37,28 @@ export const LEGAL_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
   DELIVERED: [],
   FAILED: ['RESCHEDULED'],
   RESCHEDULED: ['ASSIGNED'],
+}
+
+// Mirrors backend's edgeAuthorizedRoles table exactly
+// (internal/tracking/statemachine.go) for the DELIVERY_AGENT role only
+// — the five edges an agent may perform (CREATED->ASSIGNED and the two
+// ADMIN-only reschedule-cycle edges are deliberately absent). Same UX-
+// convenience-only disclaimer as LEGAL_TRANSITIONS: the backend
+// re-validates and re-authorizes every transition regardless (M12).
+const DELIVERY_AGENT_TRANSITIONS: Partial<Record<OrderStatus, OrderStatus[]>> = {
+  ASSIGNED: ['PICKED_UP'],
+  PICKED_UP: ['IN_TRANSIT'],
+  IN_TRANSIT: ['OUT_FOR_DELIVERY'],
+  OUT_FOR_DELIVERY: ['DELIVERED', 'FAILED'],
+}
+
+// transitionsForRole narrows LEGAL_TRANSITIONS to only the edges a given
+// role may actually perform from the current status — ADMIN gets every
+// legal edge (unchanged), DELIVERY_AGENT gets only the subset above,
+// and every other role gets none (CUSTOMER has no status-transition
+// authority in M08, unchanged by M12).
+export function transitionsForRole(status: OrderStatus, role: Role): OrderStatus[] {
+  if (role === 'ADMIN') return LEGAL_TRANSITIONS[status]
+  if (role === 'DELIVERY_AGENT') return DELIVERY_AGENT_TRANSITIONS[status] ?? []
+  return []
 }

@@ -51,7 +51,7 @@ func (f *fakeOrdersRepo) ListOrdersForCustomer(_ context.Context, _ string) ([]o
 	return nil, errors.New("not implemented in fake")
 }
 
-func (f *fakeOrdersRepo) ListAllOrders(_ context.Context) ([]orders.Order, error) {
+func (f *fakeOrdersRepo) ListAllOrders(_ context.Context, _ orders.OrderFilter) ([]orders.Order, error) {
 	return nil, errors.New("not implemented in fake")
 }
 

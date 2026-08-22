@@ -13,7 +13,7 @@ import { getOrderTracking, transitionOrderStatus } from '../services/tracking'
 import type { Agent } from '../types/agent'
 import type { Order } from '../types/order'
 import type { Reschedule } from '../types/reschedule'
-import { LEGAL_TRANSITIONS, type TrackingEvent } from '../types/tracking'
+import { LEGAL_TRANSITIONS, transitionsForRole, type TrackingEvent } from '../types/tracking'
 import { formatCurrency } from '../utils/currency'
 
 // ASSIGNED is only reachable from these two statuses in M08's state
@@ -38,6 +38,15 @@ export function OrderDetailPage() {
   const { token, user } = useAuth()
   const isAdmin = user?.role === 'ADMIN'
   const isCustomer = user?.role === 'CUSTOMER'
+  // M12: a DELIVERY_AGENT may update the status of an order assigned to
+  // them — the backend has always authorized the five agent-tier edges
+  // (internal/tracking/statemachine.go); this page simply never exposed
+  // a control for it before now. GET /orders/:id already 404s an agent
+  // viewer out of any order that isn't assigned to them (M09), so by the
+  // time `order` is loaded here for a DELIVERY_AGENT, ownership is
+  // already backend-guaranteed — no extra ownership check is needed on
+  // this page.
+  const isDeliveryAgent = user?.role === 'DELIVERY_AGENT'
   // GET /orders/:id/tracking is ADMIN/CUSTOMER only — unchanged by M09,
   // deliberately not widened to DELIVERY_AGENT (see
   // docs/order-tracking.md) — so this page must not even attempt the
@@ -214,9 +223,16 @@ export function OrderDetailPage() {
     setTransitioning(status)
     try {
       await transitionOrderStatus(token, id, { status: status as Order['status'] })
-      const [updatedOrder, updatedEvents] = await Promise.all([getOrder(token, id), getOrderTracking(token, id)])
+      const updatedOrder = await getOrder(token, id)
       setOrder(updatedOrder)
-      setEvents(updatedEvents)
+      // GET /orders/:id/tracking is ADMIN/CUSTOMER only (unchanged by
+      // M12 — see canViewTracking's own doc comment above); a
+      // DELIVERY_AGENT performing a transition must still only ever
+      // refresh the order itself, never attempt a call this role was
+      // never authorized for.
+      if (canViewTracking) {
+        setEvents(await getOrderTracking(token, id))
+      }
     } catch (err) {
       setTransitionError(err instanceof ApiError ? err.message : 'Could not update the order status.')
     } finally {
@@ -394,27 +410,43 @@ export function OrderDetailPage() {
               </div>
             )}
 
-            {isAdmin && (
+            {(isAdmin || isDeliveryAgent) && user && (
               <div className="mt-6 border-t border-slate-100 pt-6">
                 <h2 className="text-sm font-semibold text-slate-700">Update status</h2>
                 <ErrorBanner message={transitionError} />
-                {LEGAL_TRANSITIONS[order.status].length === 0 ? (
-                  <p className="mt-2 text-sm text-slate-500">This order is in a terminal state — no further transitions are possible.</p>
-                ) : (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {LEGAL_TRANSITIONS[order.status].map((next) => (
-                      <button
-                        key={next}
-                        type="button"
-                        onClick={() => void handleTransition(next)}
-                        disabled={transitioning !== null}
-                        className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
-                      >
-                        {transitioning === next ? 'Updating…' : `Mark as ${next}`}
-                      </button>
-                    ))}
-                  </div>
-                )}
+                {(() => {
+                  const available = transitionsForRole(order.status, user.role)
+                  if (available.length > 0) {
+                    return (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {available.map((next) => (
+                          <button
+                            key={next}
+                            type="button"
+                            onClick={() => void handleTransition(next)}
+                            disabled={transitioning !== null}
+                            className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                          >
+                            {transitioning === next ? 'Updating…' : `Mark as ${next}`}
+                          </button>
+                        ))}
+                      </div>
+                    )
+                  }
+                  // Two distinct empty states: a genuinely terminal
+                  // status (no role has any further edge, e.g.
+                  // DELIVERED) vs. a status with legal next edges that
+                  // simply aren't authorized for this viewer's role
+                  // (e.g. a DELIVERY_AGENT viewing a FAILED order, where
+                  // only ADMIN may move it to RESCHEDULED).
+                  return (
+                    <p className="mt-2 text-sm text-slate-500">
+                      {LEGAL_TRANSITIONS[order.status].length === 0
+                        ? 'This order is in a terminal state — no further transitions are possible.'
+                        : 'No status update is available to you for this order right now.'}
+                    </p>
+                  )
+                })()}
               </div>
             )}
           </>

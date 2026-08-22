@@ -428,6 +428,180 @@ func TestListOrdersHandler_CustomerSeesOnlyOwnOrders(t *testing.T) {
 	}
 }
 
+// --- List: M12 admin filtering ---
+
+// seedThreeOrders creates three CUSTOMER-owned orders with distinct
+// status/zone/agent combinations, returning their ids in creation order,
+// for the filter tests below to narrow with status/zone/agent query
+// parameters.
+func (f *fixture) seedThreeOrders(t *testing.T) (created, assigned, failed string) {
+	t.Helper()
+	mustCreate := func() Order {
+		quote, err := rates.CalculateQuote(context.Background(), f.zonesRepo, f.ratesRepo, rates.QuoteInput{
+			PickupAreaID: f.areaID, DropAreaID: f.areaID, OrderType: rates.OrderTypeB2C, PaymentType: rates.PaymentTypePrepaid,
+			LengthCM: 1, BreadthCM: 1, HeightCM: 1, ActualWeightKG: 1,
+		})
+		if err != nil {
+			t.Fatalf("CalculateQuote() error: %v", err)
+		}
+		order, err := f.ordersRepo.CreateOrder(context.Background(), CreateOrderInput{CustomerID: f.customer.ID, CreatedBy: f.customer.ID, Quote: quote})
+		if err != nil {
+			t.Fatalf("CreateOrder() error: %v", err)
+		}
+		return order
+	}
+
+	o1 := mustCreate() // stays CREATED, zone A, unassigned
+	o2 := mustCreate() // ASSIGNED to f.agentRecord, zone B
+	o3 := mustCreate() // FAILED, zone A, unassigned
+
+	f.ordersRepo.setZones(o1.ID, "zone-a", "zone-a")
+
+	f.ordersRepo.setStatus(o2.ID, "ASSIGNED")
+	f.ordersRepo.setZones(o2.ID, "zone-b", "zone-b")
+	f.ordersRepo.assign(o2.ID, f.agentRecord.ID)
+
+	f.ordersRepo.setStatus(o3.ID, "FAILED")
+	f.ordersRepo.setZones(o3.ID, "zone-a", "zone-a")
+
+	return o1.ID, o2.ID, o3.ID
+}
+
+func TestListOrdersHandler_AdminStatusFilter(t *testing.T) {
+	f := newFixture()
+	_, _, failedID := f.seedThreeOrders(t)
+
+	rec := doRequest(t, withAuth(t, f.admin.ID, users.RoleAdmin, f.listHandler()), http.MethodGet, "/api/v1/orders?status=FAILED", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	list := decodeJSON[[]map[string]any](t, rec)
+	if len(list) != 1 || list[0]["id"] != failedID {
+		t.Errorf("status=FAILED list = %v, want exactly the FAILED order", list)
+	}
+}
+
+func TestListOrdersHandler_AdminZoneFilter(t *testing.T) {
+	f := newFixture()
+	createdID, _, failedID := f.seedThreeOrders(t)
+
+	rec := doRequest(t, withAuth(t, f.admin.ID, users.RoleAdmin, f.listHandler()), http.MethodGet, "/api/v1/orders?zone=zone-a", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	list := decodeJSON[[]map[string]any](t, rec)
+	if len(list) != 2 {
+		t.Fatalf("zone=zone-a list = %v, want exactly 2 orders", list)
+	}
+	ids := map[string]bool{}
+	for _, o := range list {
+		ids[o["id"].(string)] = true
+	}
+	if !ids[createdID] || !ids[failedID] {
+		t.Errorf("zone=zone-a list = %v, want the CREATED and FAILED orders (both in zone-a)", list)
+	}
+}
+
+func TestListOrdersHandler_AdminAgentFilter(t *testing.T) {
+	f := newFixture()
+	_, assignedID, _ := f.seedThreeOrders(t)
+
+	rec := doRequest(t, withAuth(t, f.admin.ID, users.RoleAdmin, f.listHandler()), http.MethodGet, "/api/v1/orders?agent="+f.agentRecord.ID, "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	list := decodeJSON[[]map[string]any](t, rec)
+	if len(list) != 1 || list[0]["id"] != assignedID {
+		t.Errorf("agent filter list = %v, want exactly the order assigned to this agent", list)
+	}
+}
+
+func TestListOrdersHandler_AdminCombinedFilters(t *testing.T) {
+	f := newFixture()
+	_, assignedID, _ := f.seedThreeOrders(t)
+
+	rec := doRequest(t, withAuth(t, f.admin.ID, users.RoleAdmin, f.listHandler()), http.MethodGet, "/api/v1/orders?status=ASSIGNED&zone=zone-b&agent="+f.agentRecord.ID, "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	list := decodeJSON[[]map[string]any](t, rec)
+	if len(list) != 1 || list[0]["id"] != assignedID {
+		t.Errorf("combined-filter list = %v, want exactly the one order matching all three filters", list)
+	}
+}
+
+func TestListOrdersHandler_AdminNoFiltersReturnsEverything(t *testing.T) {
+	f := newFixture()
+	f.seedThreeOrders(t)
+
+	rec := doRequest(t, withAuth(t, f.admin.ID, users.RoleAdmin, f.listHandler()), http.MethodGet, "/api/v1/orders", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	list := decodeJSON[[]map[string]any](t, rec)
+	if len(list) != 3 {
+		t.Errorf("unfiltered admin list = %v, want all 3 orders (unchanged pre-M12 behavior)", list)
+	}
+}
+
+func TestListOrdersHandler_AdminInvalidStatusRejected(t *testing.T) {
+	f := newFixture()
+	f.seedThreeOrders(t)
+
+	rec := doRequest(t, withAuth(t, f.admin.ID, users.RoleAdmin, f.listHandler()), http.MethodGet, "/api/v1/orders?status=NOT_A_STATUS", "", nil)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("status = %d, want %d, body: %s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
+	}
+}
+
+func TestListOrdersHandler_AdminUnknownZoneOrAgentReturnsEmptyNotError(t *testing.T) {
+	f := newFixture()
+	f.seedThreeOrders(t)
+
+	rec := doRequest(t, withAuth(t, f.admin.ID, users.RoleAdmin, f.listHandler()), http.MethodGet, "/api/v1/orders?zone=does-not-exist", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	list := decodeJSON[[]map[string]any](t, rec)
+	if len(list) != 0 {
+		t.Errorf("unknown zone filter list = %v, want empty (unknown id is an empty result, not an error)", list)
+	}
+}
+
+func TestListOrdersHandler_CustomerFilterParamsIgnored(t *testing.T) {
+	f := newFixture()
+	f.seedThreeOrders(t)
+
+	// A CUSTOMER supplying filter params must get exactly their own,
+	// unfiltered, role-scoped result — never widened, never narrowed by
+	// a filter that was never meant for their role.
+	rec := doRequest(t, withAuth(t, f.customer.ID, users.RoleCustomer, f.listHandler()), http.MethodGet, "/api/v1/orders?status=FAILED&zone=zone-a&agent="+f.agentRecord.ID, "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	list := decodeJSON[[]map[string]any](t, rec)
+	if len(list) != 3 {
+		t.Errorf("customer list with filter params supplied = %v, want all 3 of their own orders (filters ignored for non-admin roles)", list)
+	}
+}
+
+func TestListOrdersHandler_DeliveryAgentFilterParamsIgnored(t *testing.T) {
+	f := newFixture()
+	_, assignedID, _ := f.seedThreeOrders(t)
+
+	// A DELIVERY_AGENT supplying filter params (e.g. trying to widen
+	// their view with someone else's status/zone/agent) must still only
+	// ever see their own assigned orders.
+	rec := doRequest(t, withAuth(t, f.agent.ID, users.RoleDeliveryAgent, f.listHandler()), http.MethodGet, "/api/v1/orders?status=CREATED&zone=zone-a", "", nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	list := decodeJSON[[]map[string]any](t, rec)
+	if len(list) != 1 || list[0]["id"] != assignedID {
+		t.Errorf("agent list with filter params supplied = %v, want exactly their own assigned order (filters ignored for non-admin roles)", list)
+	}
+}
+
 // --- List / Get: DELIVERY_AGENT scoping (M09) ---
 
 func TestListOrdersHandler_DeliveryAgentSeesOnlyAssignedOrders(t *testing.T) {

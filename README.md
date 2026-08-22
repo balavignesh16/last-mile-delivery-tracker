@@ -10,6 +10,39 @@ with a React + TypeScript frontend, structured as a modular monolith.
 
 ## Current Status
 
+**M12 — Dashboards & Evaluation Layer.** A role-specific dashboard
+landing page for each of `CUSTOMER` (`/customer/dashboard`),
+`DELIVERY_AGENT` (`/agent/dashboard`), and `ADMIN` (`/admin/dashboard`)
+— a thin navigation/composition layer over pages M01–M11 already built,
+introducing no new backend module and no new database table. Two real
+gaps were closed. First: `GET /api/v1/orders` gained optional
+`?status=&zone=&agent=` query parameters, honored for `ADMIN` only
+(silently ignored for `CUSTOMER`/`DELIVERY_AGENT`, who can never have
+their view widened by a filter) — a source-required capability M07
+explicitly deferred; a zero-value filter is byte-identical to the
+pre-M12 unfiltered call, so every existing caller is unaffected. Second,
+and more consequential: a `DELIVERY_AGENT` previously had **no frontend
+path at all** to update an order's status, despite the backend
+authorizing five transition edges for that role since M08 —
+`OrderDetailPage`'s status-update section rendered only for `isAdmin`.
+M12 widens that render condition and adds a frontend mirror of the
+backend's per-edge role authorization (`transitionsForRole`), touching
+zero lines of `internal/tracking/statemachine.go`; fixing this also
+surfaced and fixed a real latent bug, where the same transition handler
+unconditionally refetched the tracking timeline afterward — an endpoint
+`DELIVERY_AGENT` was never authorized to call. The admin dashboard adds
+a simple order-statistics widget (counts by status, computed from real,
+unfiltered order data, never hardcoded). Also added: a static,
+hand-authored OpenAPI 3.0 document (`docs/openapi.yaml`) mirroring every
+real endpoint; the required ≤ 800-word `docs/system-design.md`;
+and `backend/tests/e2e`'s first real full-stack HTTP flow tests
+(register → quote → order → assign → agent status updates → delivered,
+and the failed → reschedule → reassign → second-lifecycle variant),
+replacing the placeholder that had sat empty since M01. **No charts,
+maps, search, pagination, real-time updates, or notification UI were
+added** — all explicit, approved out-of-scope decisions; see
+`docs/dashboards.md`.
+
 **M11 — Notification Service.** The customer is now notified — by
 email always, and by SMS when a phone number is on file — for all
 eight order-lifecycle events (`ORDER_CREATED`, `AGENT_ASSIGNED`,
@@ -85,7 +118,7 @@ section to the order detail page, visible to `CUSTOMER`/`ADMIN` only.
 | M09 — Assignment Engine | ✅ Done |
 | M10 — Failed Delivery & Rescheduling | ✅ Done |
 | M11 — Notification Service | ✅ Done |
-| M12 — Dashboards & Evaluation Layer | Not started |
+| M12 — Dashboards & Evaluation Layer | ✅ Done |
 
 ## Tech Stack
 
@@ -217,6 +250,11 @@ go test ./...
 docker compose up -d postgres
 TEST_DATABASE_URL="postgres://lastmile:<your-password>@localhost:5432/lastmile?sslmode=disable" \
   go test -tags=integration ./tests/integration/...
+
+# End-to-end tests (M12) — same database, full-stack HTTP flows through
+# the real router, register through delivered/rescheduled
+TEST_DATABASE_URL="postgres://lastmile:<your-password>@localhost:5432/lastmile?sslmode=disable" \
+  go test -tags=e2e ./tests/e2e/...
 ```
 
 **Frontend:**
@@ -686,6 +724,67 @@ explicitly states M11 adds no REST API. Short version:
   recipients other than the order's own customer, and no change to
   M08's, M09's, or M10's own logic.
 
+## Dashboards & Evaluation Layer (M12)
+
+Full design detail (why no new backend module or database table was
+needed, the exact agent status-update fix, the filter/statistics
+design) is in [`docs/dashboards.md`](docs/dashboards.md); the required
+system-design write-up is [`docs/system-design.md`](docs/system-design.md)
+and the OpenAPI document is [`docs/openapi.yaml`](docs/openapi.yaml).
+Short version:
+
+- **Three dashboards, one pattern**: `pages/customer/DashboardPage.tsx`
+  (`/customer/dashboard`), `pages/agent/DashboardPage.tsx`
+  (`/agent/dashboard`), and `pages/admin/DashboardPage.tsx`
+  (`/admin/dashboard`) each link into pages that already exist and are
+  already fully tested — none of them duplicate `OrdersPage` or
+  `OrderDetailPage`'s own content. A new `DashboardLink` card component
+  is the only new shared UI piece.
+- **The real gap this milestone closes**: `internal/tracking`'s
+  `edgeAuthorizedRoles` has always authorized `DELIVERY_AGENT` for five
+  status-transition edges, but `OrderDetailPage`'s status-update section
+  rendered only for `isAdmin` — an agent had a fully backend-supported
+  capability with no UI path to use it. M12 widens that one render
+  condition and adds `transitionsForRole` (`types/tracking.ts`), a
+  frontend-only mirror of the backend's per-edge authorization — the
+  same "UX convenience, not a security boundary" disclaimer
+  `LEGAL_TRANSITIONS` already carries. Zero lines of
+  `internal/tracking/statemachine.go` changed. Making this path
+  reachable surfaced a real, previously-latent bug — `handleTransition`
+  unconditionally refetched the ADMIN/CUSTOMER-only tracking timeline
+  after every transition, which would have 403'd for an agent — now
+  fixed to only refetch when the viewer is authorized to.
+- **Admin order filtering**: `GET /orders?status=&zone=&agent=`, three
+  independently optional, combinable query parameters, honored for
+  `ADMIN` only — a `CUSTOMER`/`DELIVERY_AGENT` supplying them gets them
+  silently ignored, never a widened view. `internal/orders`'s new
+  `OrderFilter` struct and `ListAllOrders(ctx, filter)` build the
+  `WHERE` clause dynamically from whichever fields are non-empty; a
+  zero-value filter is the exact unfiltered query every prior milestone
+  relied on. `zone` matches an order's pickup *or* drop zone; an
+  invalid `status` is `422`; an unknown `zone`/`agent` id is an empty
+  result, not an error.
+- **Order statistics**: simple counts by status on the admin dashboard,
+  computed client-side from a real, unfiltered `GET /orders` call —
+  never hardcoded, never a new aggregation endpoint.
+- **OpenAPI & system design**: `docs/openapi.yaml` is a static,
+  hand-authored OpenAPI 3.0 document (no runtime reflection/Swagger-UI
+  dependency added) mirroring every real route; `docs/system-design.md`
+  is the required ≤ 800-word write-up covering the rate engine, zone
+  detection, auto-assignment, and failed-delivery handling.
+- **E2E tests**: `backend/tests/e2e/` — empty since M01 — now has real,
+  full-stack HTTP flow tests exercising the entire real router
+  end-to-end: register → quote → order → assign → agent-driven status
+  updates → delivered, and the failed → reschedule → auto-reassign →
+  second-lifecycle-to-delivered variant, both asserting real tracking
+  history, real actor ids, and that the M11 notification side effect
+  actually fires at every step.
+- **Out of scope, by design**: charts, graphs, maps, search, pagination,
+  real-time/WebSocket updates, a notification bell/history/preferences
+  UI (M11 stays untouched), export functionality, extra analytics or
+  KPIs beyond simple status counts, a new dashboard backend module or
+  database table, and any new frontend dependency.
+
 ## Repository Structure
 
 ```text
@@ -709,7 +808,7 @@ last-mile-delivery-tracker/
 │   │   ├── agents/               # delivery_agents domain, repository (transactional creation), handlers, routes (M03)
 │   │   ├── zones/                # zones/areas domain, repository, resolution service, handlers, routes (M04)
 │   │   ├── rates/                # rate_cards/rate_card_slabs domain, concurrency-safe repository, handlers, routes (M05); pricing.go/quote_handler.go add the M06 calculation engine + POST /orders/quote
-│   │   ├── orders/                # orders domain, repository, handlers, routes (M07) — calls rates.CalculateQuote, never reimplements pricing
+│   │   ├── orders/                # orders domain, repository, handlers, routes (M07) — calls rates.CalculateQuote, never reimplements pricing; OrderFilter + admin status/zone/agent query-param filtering (M12)
 │   │   ├── tracking/              # status state machine, order_tracking_events domain, repository, handlers, routes (M08)
 │   │   ├── assignment/            # candidate ranking, eligibility, repository (reuses tracking.TransitionTx), handlers, routes (M09)
 │   │   ├── rescheduling/          # reschedule domain/validation, repository (reuses tracking.TransitionTx, frees the previous agent), handlers, routes (M10)
@@ -719,26 +818,27 @@ last-mile-delivery-tracker/
 │   │                               #   0006 rate_cards, 0007 rate_card_slabs (M05); M06 added none — pure calculation, no new schema;
 │   │                               #   0008 orders (M07); 0009 order_tracking_events (M08, no ALTER to orders);
 │   │                               #   0010 orders.assigned_agent_id + indexes (M09); 0011 reschedule_requests (M10);
-│   │                               #   0012 notifications (M11)
+│   │                               #   0012 notifications (M11); M12 added none — no schema change required
 │   └── tests/
 │       ├── unit/                  # convention note — unit tests are co-located with source
 │       ├── integration/           # DB-backed integration tests (build tag: integration)
-│       └── e2e/                   # reserved — full-stack flow tests start around M12
+│       └── e2e/                   # full-stack HTTP flow tests (build tag: e2e) — happy path and failed/reschedule/reassign, incl. M11 notification side effects (M12)
 │
 ├── frontend/
 │   ├── package.json
 │   ├── vite.config.ts
 │   └── src/
-│       ├── components/            # Layout (role-aware nav), StatusBadge, ErrorBanner, ProtectedRoute (+roles), AreaPicker (M06, shared with M07)
+│       ├── components/            # Layout (role-aware nav, +Dashboard link, M12), StatusBadge, ErrorBanner, ProtectedRoute (+roles), AreaPicker (M06, shared with M07), DashboardLink (M12)
 │       ├── pages/                 # Home, LoginPage, RegisterPage, Account (profile edit);
 │       │                          #   admin/AgentsPage, agent/OperationsPage (M03); admin/ZonesPage (M04); admin/RatesPage (M05); QuotePage (M06);
-│       │                          #   CreateOrderPage, OrdersPage (+"My assigned orders" for DELIVERY_AGENT, M09), OrderDetailPage
+│       │                          #   CreateOrderPage, OrdersPage (+"My assigned orders" for DELIVERY_AGENT, M09; +admin status/zone/agent filters, M12), OrderDetailPage
 │       │                          #   (M07; +tracking timeline & admin transition control, M08; +assigned-agent display & admin assign/auto-assign controls, M09;
-│       │                          #   +"Reschedule delivery" control & reschedule-history section, M10)
-│       ├── services/              # api.ts (+apiPut, +apiDelete), health.ts, auth.ts (+updateProfile), agents.ts (M03), zones.ts (M04), rates.ts (M05), quote.ts (M06), orders.ts (M07), tracking.ts (M08), assignment.ts (M09), rescheduling.ts (M10)
+│       │                          #   +"Reschedule delivery" control & reschedule-history section, M10; +DELIVERY_AGENT status-update control, M12);
+│       │                          #   customer/DashboardPage, agent/DashboardPage, admin/DashboardPage (+order statistics) (M12)
+│       ├── services/              # api.ts (+apiPut, +apiDelete), health.ts, auth.ts (+updateProfile), agents.ts (M03), zones.ts (M04), rates.ts (M05), quote.ts (M06), orders.ts (M07; +status/zone/agent filter params, M12), tracking.ts (M08), assignment.ts (M09), rescheduling.ts (M10)
 │       ├── hooks/                 # useHealthCheck, useAuth
 │       ├── contexts/              # AuthContext.tsx (provider) + auth-context.ts (context object)
-│       ├── types/                 # HealthResponse, auth.ts (+ProfileUpdateInput), agent.ts (M03), zone.ts (M04), rate.ts (M05), quote.ts (M06), order.ts (M07; +assigned_agent_id, M09), tracking.ts (M08), assignment.ts (M09), reschedule.ts (M10)
+│       ├── types/                 # HealthResponse, auth.ts (+ProfileUpdateInput), agent.ts (M03), zone.ts (M04), rate.ts (M05), quote.ts (M06), order.ts (M07; +assigned_agent_id, M09; +OrderFilter/ORDER_STATUSES, M12), tracking.ts (M08; +transitionsForRole, M12), assignment.ts (M09), reschedule.ts (M10)
 │       ├── test/                  # setup.ts — React Testing Library cleanup
 │       └── utils/                 # currency.ts (formatCurrency, shared M06/M07)
 │
@@ -753,7 +853,10 @@ last-mile-delivery-tracker/
 │   ├── order-tracking.md          # state machine, per-edge authorization, concurrency proof, initial event (M08)
 │   ├── assignment-engine.md       # eligibility rule, ranking algorithm, M08 reuse, concurrency proof, assigned_agent_id schema (M09)
 │   ├── failed-delivery.md         # reschedule endpoints, the CUSTOMER-vs-M08-matrix resolution, reschedule_requests schema, agent-freeing, M09 reuse (M10)
-│   └── notifications.md           # 8 lifecycle events, post-commit hook pattern, provider abstraction, tracking_event_id idempotency, no API/UI (M11)
+│   ├── notifications.md           # 8 lifecycle events, post-commit hook pattern, provider abstraction, tracking_event_id idempotency, no API/UI (M11)
+│   ├── dashboards.md              # 3 dashboards, admin filters/statistics, the agent status-update UI fix, why no new module/table (M12)
+│   ├── openapi.yaml               # static, hand-authored OpenAPI 3.0 document mirroring api.md exactly (M12)
+│   └── system-design.md           # required ≤800-word system-design write-up (M12)
 │
 └── scripts/
     └── seed/                      # reserved for later modules' larger seed data (M02's demo users seed from main.go instead — see its README)
@@ -853,3 +956,10 @@ Grows with each module.
 | Notification concurrency: claim-before-send + DB unique index prevents a duplicate send | `backend/internal/notifications/repository.go` (`Claim`) | `TestNotificationConcurrency_ConcurrentIdenticalAttemptsClaimExactlyOnce` (repeated `-count=5`) | `docs/notifications.md` |
 | Provider failure/panic never breaks the triggering lifecycle commit | `backend/internal/notifications/service.go` (`dispatch`, `safeSend`) | `TestNotifyTransition_ProviderPanicContained`, `TestNotificationFlow_ProviderFailureDoesNotBreakLifecycleCommit` (integration) | `docs/notifications.md` |
 | No REST API and no frontend UI, by design | — (no new routes, no new frontend files) | `TestNotifications_NoPublicEndpointsExist` | `docs/api.md`, `docs/notifications.md` |
+| Customer/Agent/Admin dashboard landing pages, role-gated | `frontend/src/pages/{customer,agent,admin}/DashboardPage.tsx`, `App.tsx` | `customer/DashboardPage.test.tsx`, `agent/DashboardPage.test.tsx`, `admin/DashboardPage.test.tsx` | `docs/dashboards.md` |
+| Admin order filtering by status/zone/agent, combinable, non-admin roles unaffected | `backend/internal/orders/repository.go` (`OrderFilter`, `ListAllOrders`), `handler.go` (`parseOrderFilter`) | `TestListOrdersHandler_Admin*Filter*`, `TestOrderList_AdminFiltering` (integration) | `docs/dashboards.md`, `docs/api.md` |
+| Delivery-agent status-update UI reaches an already-authorized backend capability, zero state-machine changes | `frontend/src/pages/OrderDetailPage.tsx`, `types/tracking.ts` (`transitionsForRole`) | `OrderDetailPage.test.tsx` (agent transition tests) | `docs/dashboards.md` |
+| Admin order statistics computed from real, unfiltered order data | `frontend/src/pages/admin/DashboardPage.tsx` | `admin/DashboardPage.test.tsx` | `docs/dashboards.md` |
+| OpenAPI documentation matches the real API surface, evaluator-inspectable | `docs/openapi.yaml` | validated as parseable OpenAPI 3.0 YAML; cross-checked path-by-path against `docs/api.md` | `docs/api.md`, `docs/openapi.yaml` |
+| Required system-design write-up, within the 800-word limit | `docs/system-design.md` | `wc -w` verified ≤ 800 | `docs/system-design.md` |
+| Full-stack E2E flows: happy path and failed/reschedule/reassign, real router, real DB, real M11 notification side effects | `backend/tests/e2e/lifecycle_test.go` | `TestE2E_HappyPath_RegisterQuoteOrderAssignDeliver`, `TestE2E_FailedDeliveryRescheduleReassignContinues` (`-tags=e2e`) | `README.md`, `docs/dashboards.md` |

@@ -66,6 +66,20 @@ Written so far:
   anchored on the exact `tracking_event_id` (not `(order_id, event,
   channel)`), and why there is no REST API, no frontend UI, no
   retries, and no queues/workers (M11).
+- [`dashboards.md`](./dashboards.md) — the M12 customer/agent/admin
+  dashboards, the admin order-filter query parameters and simple order
+  statistics, the delivery-agent status-update UI gap this milestone
+  closes (and the pre-existing tracking-refetch bug that closing it
+  surfaced), why no new database table or backend module was needed,
+  and the explicit out-of-scope list (M12).
+- [`openapi.yaml`](./openapi.yaml) — a static, hand-authored OpenAPI 3.0
+  document mirroring `api.md` exactly, for evaluator-friendly API
+  inspection in any OpenAPI viewer (M12).
+- [`system-design.md`](./system-design.md) — the required ≤ 800-word
+  system-design write-up: architecture, the rate calculation engine,
+  zone detection, order lifecycle and immutable tracking,
+  auto-assignment, failed delivery/rescheduling/notifications, and
+  security/RBAC (M12).
 
 The rest don't exist yet — the root [README.md](../README.md) carries each
 completed module's summary directly, and links into this directory as

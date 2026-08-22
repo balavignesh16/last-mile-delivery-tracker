@@ -326,9 +326,18 @@ func (f *fakeOrdersRepo) ListOrdersForCustomer(_ context.Context, customerID str
 	return out, nil
 }
 
-func (f *fakeOrdersRepo) ListAllOrders(_ context.Context) ([]Order, error) {
+func (f *fakeOrdersRepo) ListAllOrders(_ context.Context, filter OrderFilter) ([]Order, error) {
 	out := make([]Order, 0, len(f.byID))
 	for _, o := range f.byID {
+		if filter.Status != "" && o.Status != filter.Status {
+			continue
+		}
+		if filter.ZoneID != "" && o.PickupZoneID != filter.ZoneID && o.DropZoneID != filter.ZoneID {
+			continue
+		}
+		if filter.AgentID != "" && (o.AssignedAgentID == nil || *o.AssignedAgentID != filter.AgentID) {
+			continue
+		}
 		out = append(out, o)
 	}
 	return out, nil
@@ -358,6 +367,25 @@ func (f *fakeOrdersRepo) FindOrderByID(_ context.Context, id string) (Order, err
 func (f *fakeOrdersRepo) assign(orderID, agentID string) {
 	o := f.byID[orderID]
 	o.AssignedAgentID = &agentID
+	f.byID[orderID] = o
+}
+
+// setStatus is a test-only helper (M12) letting handler tests seed an
+// order already sitting at a given status, without going through the
+// real M08 transition flow — the same "assign directly" convention
+// assign already established above.
+func (f *fakeOrdersRepo) setStatus(orderID, status string) {
+	o := f.byID[orderID]
+	o.Status = status
+	f.byID[orderID] = o
+}
+
+// setZones is a test-only helper (M12) letting handler tests seed an
+// order's pickup/drop zone directly, for zone-filter tests.
+func (f *fakeOrdersRepo) setZones(orderID, pickupZoneID, dropZoneID string) {
+	o := f.byID[orderID]
+	o.PickupZoneID = pickupZoneID
+	o.DropZoneID = dropZoneID
 	f.byID[orderID] = o
 }
 

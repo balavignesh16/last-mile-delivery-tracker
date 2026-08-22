@@ -12,6 +12,20 @@ import (
 // ErrOrderNotFound is returned when no orders row matches the given id.
 var ErrOrderNotFound = errors.New("order not found")
 
+// OrderFilter narrows ListAllOrders to the ADMIN-facing status/zone/agent
+// filters M12 adds (see docs/dashboards.md). A zero-value OrderFilter
+// (every field "") matches every order — the exact same result
+// ListAllOrders always returned before M12 — so the unfiltered
+// GET /orders behavior every prior milestone relies on is provably
+// unchanged. ZoneID matches an order whose pickup OR drop zone is the
+// given zone (an admin filtering "orders touching this zone" cares
+// about either side, not just pickup).
+type OrderFilter struct {
+	Status  string
+	ZoneID  string
+	AgentID string
+}
+
 // Repository is the storage interface order handlers depend on. An
 // interface — rather than the concrete *PostgresRepository — so handler
 // unit tests can inject an in-memory fake, the same pattern every prior
@@ -33,9 +47,10 @@ type Repository interface {
 	// first — the CUSTOMER-facing view of GET /orders.
 	ListOrdersForCustomer(ctx context.Context, customerID string) ([]Order, error)
 	// ListAllOrders returns every order, newest first — the ADMIN-facing
-	// view of GET /orders. No filtering: M07 explicitly does not add
-	// status/zone/agent query parameters (see docs/order-management.md).
-	ListAllOrders(ctx context.Context) ([]Order, error)
+	// view of GET /orders — narrowed by filter (M12; see OrderFilter's own
+	// doc comment for why a zero-value filter is behavior-identical to
+	// the pre-M12, unfiltered call every prior milestone relied on).
+	ListAllOrders(ctx context.Context, filter OrderFilter) ([]Order, error)
 	// ListOrdersForAgent returns only the orders currently assigned to
 	// one delivery agent, newest first — the DELIVERY_AGENT-facing view
 	// of GET /orders (M09). Added alongside ListOrdersForCustomer/
@@ -131,8 +146,31 @@ func (r *PostgresRepository) ListOrdersForCustomer(ctx context.Context, customer
 	return scanOrders(rows)
 }
 
-func (r *PostgresRepository) ListAllOrders(ctx context.Context) ([]Order, error) {
-	rows, err := r.pool.Query(ctx, `SELECT `+Columns+` FROM orders ORDER BY created_at DESC`)
+// ListAllOrders builds its WHERE clause dynamically from filter's
+// non-empty fields — no query-builder dependency, just positional
+// placeholders appended one at a time, the same plain-SQL style every
+// other repository in this project already uses. An empty filter field
+// contributes no clause at all, so a zero-value OrderFilter produces the
+// exact unfiltered query this method always ran before M12.
+func (r *PostgresRepository) ListAllOrders(ctx context.Context, filter OrderFilter) ([]Order, error) {
+	query := `SELECT ` + Columns + ` FROM orders WHERE 1=1`
+	var args []any
+
+	if filter.Status != "" {
+		args = append(args, filter.Status)
+		query += fmt.Sprintf(" AND status = $%d", len(args))
+	}
+	if filter.ZoneID != "" {
+		args = append(args, filter.ZoneID)
+		query += fmt.Sprintf(" AND (pickup_zone_id = $%d OR drop_zone_id = $%d)", len(args), len(args))
+	}
+	if filter.AgentID != "" {
+		args = append(args, filter.AgentID)
+		query += fmt.Sprintf(" AND assigned_agent_id = $%d", len(args))
+	}
+	query += ` ORDER BY created_at DESC`
+
+	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list all orders: %w", err)
 	}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 	"time"
@@ -481,6 +482,188 @@ func TestOrderList_DeliveryAgentSeesOnlyAssignedOrders(t *testing.T) {
 	if getOther.Code != http.StatusNotFound {
 		t.Errorf("agent GET another agent's assigned order status = %d, want %d (must not reveal existence)", getOther.Code, http.StatusNotFound)
 	}
+}
+
+// --- M12: admin order filtering ---
+
+// TestOrderList_AdminFiltering exercises the real GET /orders?status=&
+// zone=&agent= path end to end against real Postgres: three orders in
+// two zones, one assigned to a real agent, with status set directly via
+// SQL (this test file mounts no tracking/assignment router, so it
+// reaches into the same columns TestOrderList_DeliveryAgentSeesOnlyAssignedOrders
+// already does for assigned_agent_id) — then confirms every filter,
+// every combination, an unknown id, an invalid status, and that
+// CUSTOMER/DELIVERY_AGENT callers get their filter parameters ignored.
+func TestOrderList_AdminFiltering(t *testing.T) {
+	router, uRepo, zRepo, _, _, pool := setupOrdersTest(t)
+	admin := adminToken(t, uRepo)
+	customer := customerToken(t, uRepo)
+	aRepo := agents.NewPostgresRepository(pool)
+
+	zoneAID, pickupA := createZoneAndArea(t, zRepo, uniqueEmail("order-filter-zone-a"), "Pickup A")
+	dropA, err := zRepo.CreateArea(context.Background(), zoneAID, zones.CreateAreaInput{Name: "Drop A"})
+	if err != nil {
+		t.Fatalf("CreateArea() error: %v", err)
+	}
+	zoneBID, pickupB := createZoneAndArea(t, zRepo, uniqueEmail("order-filter-zone-b"), "Pickup B")
+	dropB, err := zRepo.CreateArea(context.Background(), zoneBID, zones.CreateAreaInput{Name: "Drop B"})
+	if err != nil {
+		t.Fatalf("CreateArea() error: %v", err)
+	}
+	cardID := setupActiveRateCard(t, router, pool, admin, "B2C", "INTRA", 0)
+	addSlab(t, router, admin, cardID, 0, nil, 40)
+
+	hash, err := auth.HashPassword("password123")
+	if err != nil {
+		t.Fatalf("HashPassword() error: %v", err)
+	}
+	agent, err := aRepo.Create(context.Background(), agents.CreateAgentInput{Email: uniqueEmail("order-filter-agent"), PasswordHash: hash, FullName: "Filter Agent"})
+	if err != nil {
+		t.Fatalf("Create agent failed: %v", err)
+	}
+
+	createOrder := func(pickup, drop string) string {
+		body := fmt.Sprintf(`{"pickup_area_id":%q,"drop_area_id":%q,"order_type":"B2C","payment_type":"PREPAID","length_cm":1,"breadth_cm":1,"height_cm":1,"actual_weight_kg":1}`, pickup, drop)
+		rec := doJSON(router, http.MethodPost, "/api/v1/orders", customer, body)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("order create failed: %d %s", rec.Code, rec.Body.String())
+		}
+		return decodeOrder(t, rec.Body.Bytes())["id"].(string)
+	}
+	inZoneACreated := createOrder(pickupA, dropA.ID)
+	inZoneBAssigned := createOrder(pickupB, dropB.ID)
+	inZoneAFailed := createOrder(pickupA, dropA.ID)
+
+	ctx := context.Background()
+	if _, err := pool.Exec(ctx, `UPDATE orders SET status = 'ASSIGNED', assigned_agent_id = $1 WHERE id = $2`, agent.ID, inZoneBAssigned); err != nil {
+		t.Fatalf("seed ASSIGNED order failed: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE orders SET status = 'FAILED' WHERE id = $1`, inZoneAFailed); err != nil {
+		t.Fatalf("seed FAILED order failed: %v", err)
+	}
+
+	listIDs := func(rec *httptest.ResponseRecorder) []string {
+		var list []map[string]any
+		if err := json.NewDecoder(rec.Body).Decode(&list); err != nil {
+			t.Fatalf("decode list: %v", err)
+		}
+		ids := make([]string, len(list))
+		for i, o := range list {
+			ids[i] = o["id"].(string)
+		}
+		return ids
+	}
+	containsID := func(ids []string, want string) bool {
+		for _, id := range ids {
+			if id == want {
+				return true
+			}
+		}
+		return false
+	}
+
+	t.Run("status filter", func(t *testing.T) {
+		// This is a shared, never-reset Postgres instance (the same
+		// convention every prior milestone's integration suite uses) —
+		// other tests/runs may leave behind their own FAILED orders, so
+		// this asserts membership + a per-row status invariant rather
+		// than an exact count.
+		rec := doJSON(router, http.MethodGet, "/api/v1/orders?status=FAILED", admin, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+		}
+		var list []map[string]any
+		if err := json.NewDecoder(rec.Body).Decode(&list); err != nil {
+			t.Fatalf("decode list: %v", err)
+		}
+		found := false
+		for _, o := range list {
+			if o["status"] != "FAILED" {
+				t.Errorf("status=FAILED response included a non-FAILED order: %v", o)
+			}
+			if o["id"] == inZoneAFailed {
+				found = true
+			}
+			if o["id"] == inZoneACreated || o["id"] == inZoneBAssigned {
+				t.Errorf("status=FAILED response included a non-FAILED seeded order: %v", o)
+			}
+		}
+		if !found {
+			t.Errorf("status=FAILED response = %v, want it to include %v", list, inZoneAFailed)
+		}
+	})
+
+	t.Run("zone filter", func(t *testing.T) {
+		rec := doJSON(router, http.MethodGet, "/api/v1/orders?zone="+zoneAID, admin, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+		}
+		ids := listIDs(rec)
+		if len(ids) != 2 || !containsID(ids, inZoneACreated) || !containsID(ids, inZoneAFailed) {
+			t.Errorf("zone=%s = %v, want exactly [%v, %v]", zoneAID, ids, inZoneACreated, inZoneAFailed)
+		}
+	})
+
+	t.Run("agent filter", func(t *testing.T) {
+		rec := doJSON(router, http.MethodGet, "/api/v1/orders?agent="+agent.ID, admin, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+		}
+		ids := listIDs(rec)
+		if len(ids) != 1 || ids[0] != inZoneBAssigned {
+			t.Errorf("agent=%s = %v, want exactly [%v]", agent.ID, ids, inZoneBAssigned)
+		}
+	})
+
+	t.Run("combined filters", func(t *testing.T) {
+		rec := doJSON(router, http.MethodGet, "/api/v1/orders?status=ASSIGNED&zone="+zoneBID+"&agent="+agent.ID, admin, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+		}
+		ids := listIDs(rec)
+		if len(ids) != 1 || ids[0] != inZoneBAssigned {
+			t.Errorf("combined filters = %v, want exactly [%v]", ids, inZoneBAssigned)
+		}
+	})
+
+	t.Run("no filters returns everything", func(t *testing.T) {
+		rec := doJSON(router, http.MethodGet, "/api/v1/orders", admin, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+		}
+		ids := listIDs(rec)
+		if !containsID(ids, inZoneACreated) || !containsID(ids, inZoneBAssigned) || !containsID(ids, inZoneAFailed) {
+			t.Errorf("unfiltered list = %v, want all 3 seeded orders present", ids)
+		}
+	})
+
+	t.Run("invalid status rejected", func(t *testing.T) {
+		rec := doJSON(router, http.MethodGet, "/api/v1/orders?status=NOT_A_STATUS", admin, "")
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Errorf("status = %d, want %d, body: %s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
+		}
+	})
+
+	t.Run("unknown zone returns empty not error", func(t *testing.T) {
+		rec := doJSON(router, http.MethodGet, "/api/v1/orders?zone=00000000-0000-0000-0000-000000000000", admin, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+		}
+		if ids := listIDs(rec); len(ids) != 0 {
+			t.Errorf("unknown zone = %v, want empty", ids)
+		}
+	})
+
+	t.Run("customer filter params ignored", func(t *testing.T) {
+		rec := doJSON(router, http.MethodGet, "/api/v1/orders?status=FAILED&zone="+zoneAID, customer, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("status = %d, body: %s", rec.Code, rec.Body.String())
+		}
+		ids := listIDs(rec)
+		if !containsID(ids, inZoneACreated) || !containsID(ids, inZoneBAssigned) || !containsID(ids, inZoneAFailed) {
+			t.Errorf("customer list with filters supplied = %v, want all 3 of their own orders regardless of the filter params", ids)
+		}
+	})
 }
 
 // --- RBAC ---

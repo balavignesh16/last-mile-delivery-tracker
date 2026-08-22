@@ -3,10 +3,13 @@ import { ProtectedRoute } from './components/ProtectedRoute'
 import { AuthProvider } from './contexts/AuthContext'
 import { Account } from './pages/Account'
 import { AgentsPage } from './pages/admin/AgentsPage'
+import { DashboardPage as AdminDashboardPage } from './pages/admin/DashboardPage'
 import { RatesPage } from './pages/admin/RatesPage'
 import { ZonesPage } from './pages/admin/ZonesPage'
+import { DashboardPage as AgentDashboardPage } from './pages/agent/DashboardPage'
 import { OperationsPage } from './pages/agent/OperationsPage'
 import { CreateOrderPage } from './pages/CreateOrderPage'
+import { DashboardPage as CustomerDashboardPage } from './pages/customer/DashboardPage'
 import { Home } from './pages/Home'
 import { LoginPage } from './pages/LoginPage'
 import { OrderDetailPage } from './pages/OrderDetailPage'
@@ -27,6 +30,30 @@ function App() {
             element={
               <ProtectedRoute>
                 <Account />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/customer/dashboard"
+            element={
+              <ProtectedRoute roles={['CUSTOMER']}>
+                <CustomerDashboardPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/agent/dashboard"
+            element={
+              <ProtectedRoute roles={['DELIVERY_AGENT']}>
+                <AgentDashboardPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/admin/dashboard"
+            element={
+              <ProtectedRoute roles={['ADMIN']}>
+                <AdminDashboardPage />
               </ProtectedRoute>
             }
           />
