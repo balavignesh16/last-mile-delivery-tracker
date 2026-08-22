@@ -1,3 +1,4 @@
+import { MapPin, Navigation, Truck } from 'lucide-react'
 import { useEffect, useState, type FormEvent } from 'react'
 import { ErrorBanner } from '../../components/ErrorBanner'
 import { Layout } from '../../components/Layout'
@@ -169,9 +170,14 @@ export function OperationsPage() {
 
   return (
     <Layout>
-      <h1 className="text-xl font-semibold">Delivery Operations</h1>
+      <div className="flex items-center gap-2.5">
+        <span className="flex h-9 w-9 items-center justify-center rounded-md bg-navy-50 text-navy-600">
+          <Truck className="h-5 w-5" aria-hidden="true" />
+        </span>
+        <h1 className="text-xl font-semibold">Delivery Operations</h1>
+      </div>
 
-      <div className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="mt-6 rounded-lg border border-navy-100 bg-white p-6 shadow-sm">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold text-slate-700">Availability</h2>
           <StatusBadge label={agent.availability} state={AVAILABILITY_STATE[agent.availability]} />
@@ -192,8 +198,11 @@ export function OperationsPage() {
         </div>
       </div>
 
-      <div className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="text-sm font-semibold text-slate-700">Current zone</h2>
+      <div className="mt-6 rounded-lg border border-navy-100 bg-white p-6 shadow-sm">
+        <h2 className="flex items-center gap-1.5 text-sm font-semibold text-slate-700">
+          <MapPin className="h-4 w-4 text-navy-500" aria-hidden="true" />
+          Current zone
+        </h2>
         <p className="mt-1 text-xs text-slate-500">
           The zone you're currently operating in. This is what makes you eligible for auto-assignment — orders in
           this zone are offered to you first.
@@ -226,15 +235,18 @@ export function OperationsPage() {
           <button
             type="submit"
             disabled={savingZone}
-            className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+            className="rounded-md bg-navy-600 px-4 py-2 text-sm font-medium text-white hover:bg-navy-700 disabled:opacity-50"
           >
             {savingZone ? 'Saving…' : 'Update zone'}
           </button>
         </form>
       </div>
 
-      <div className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
-        <h2 className="text-sm font-semibold text-slate-700">Current location</h2>
+      <div className="mt-6 rounded-lg border border-navy-100 bg-white p-6 shadow-sm">
+        <h2 className="flex items-center gap-1.5 text-sm font-semibold text-slate-700">
+          <Navigation className="h-4 w-4 text-navy-500" aria-hidden="true" />
+          Current location
+        </h2>
         <form onSubmit={handleLocationSubmit} className="mt-4 grid gap-4 sm:grid-cols-2">
           <ErrorBanner message={locationError} />
           {locationSuccess && (
@@ -275,7 +287,7 @@ export function OperationsPage() {
             <button
               type="submit"
               disabled={savingLocation}
-              className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+              className="rounded-md bg-navy-600 px-4 py-2 text-sm font-medium text-white hover:bg-navy-700 disabled:opacity-50"
             >
               {savingLocation ? 'Saving…' : 'Update location'}
             </button>

@@ -56,7 +56,7 @@ export function Account() {
         ← Back to dashboard
       </Link>
 
-      <div className="mt-4 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="mt-4 rounded-lg border border-navy-100 bg-white p-6 shadow-sm">
         <div className="flex items-center justify-between">
           <h1 className="text-xl font-semibold">My Account</h1>
           {/* Role is displayed, never an editable field — the backend
@@ -111,7 +111,7 @@ export function Account() {
           <button
             type="submit"
             disabled={saving}
-            className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+            className="rounded-md bg-navy-600 px-4 py-2 text-sm font-medium text-white hover:bg-navy-700 disabled:opacity-50"
           >
             {saving ? 'Saving…' : 'Save changes'}
           </button>
@@ -119,20 +119,20 @@ export function Account() {
       </div>
 
       {(user.role === 'ADMIN' || user.role === 'CUSTOMER') && (
-        <div className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="mt-6 rounded-lg border border-navy-100 bg-white p-6 shadow-sm">
           <h2 className="text-sm font-semibold text-slate-700">Quick links</h2>
           <p className="mt-2 flex flex-wrap gap-x-4 gap-y-2 text-sm">
-            <Link to="/quote" className="font-medium text-brand-600 hover:text-brand-700">
+            <Link to="/quote" className="font-medium text-navy-600 hover:text-navy-700">
               Get a delivery quote
             </Link>
-            <Link to="/orders/new" className="font-medium text-brand-600 hover:text-brand-700">
+            <Link to="/orders/new" className="font-medium text-navy-600 hover:text-navy-700">
               Place an order
             </Link>
-            <Link to="/orders" className="font-medium text-brand-600 hover:text-brand-700">
+            <Link to="/orders" className="font-medium text-navy-600 hover:text-navy-700">
               {user.role === 'ADMIN' ? 'View all orders' : 'View my orders'}
             </Link>
             {user.role === 'ADMIN' && (
-              <Link to="/admin/agents" className="font-medium text-brand-600 hover:text-brand-700">
+              <Link to="/admin/agents" className="font-medium text-navy-600 hover:text-navy-700">
                 Manage delivery agents
               </Link>
             )}
@@ -141,10 +141,10 @@ export function Account() {
       )}
 
       {user.role === 'DELIVERY_AGENT' && (
-        <div className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+        <div className="mt-6 rounded-lg border border-navy-100 bg-white p-6 shadow-sm">
           <h2 className="text-sm font-semibold text-slate-700">Quick links</h2>
           <p className="mt-2 text-sm">
-            <Link to="/agent" className="font-medium text-brand-600 hover:text-brand-700">
+            <Link to="/agent" className="font-medium text-navy-600 hover:text-navy-700">
               Manage availability &amp; location
             </Link>
           </p>

@@ -1,7 +1,9 @@
+import { Check, Copy, RotateCcw, Truck, UserCheck } from 'lucide-react'
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { Layout } from '../components/Layout'
+import { STATUS_ICON } from '../components/order-status'
 import { OrderStatusBadge } from '../components/OrderStatusBadge'
 import { useAuth } from '../hooks/useAuth'
 import { assignOrder, autoAssignOrder } from '../services/assignment'
@@ -75,6 +77,8 @@ export function OrderDetailPage() {
   const [rescheduleError, setRescheduleError] = useState<string | null>(null)
   const [rescheduleSuccess, setRescheduleSuccess] = useState<string | null>(null)
   const [rescheduling, setRescheduling] = useState(false)
+
+  const [copied, setCopied] = useState(false)
 
   useEffect(() => {
     if (!token || !id) return
@@ -234,20 +238,37 @@ export function OrderDetailPage() {
     }
   }
 
+  function handleCopyId() {
+    if (!order) return
+    void navigator.clipboard.writeText(order.id)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
+
   return (
     <Layout>
       <Link to="/orders" className="text-sm text-slate-500 hover:text-slate-800">
         ← Back to orders
       </Link>
 
-      <div className="mt-4 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="mt-4 rounded-lg border border-navy-100 bg-white p-6 shadow-sm">
         <ErrorBanner message={error} />
         {loading ? (
           <p className="text-sm text-slate-500">Loading…</p>
         ) : !order ? null : (
           <>
             <div className="flex items-center justify-between">
-              <h1 className="text-xl font-semibold">Order {order.id}</h1>
+              <div className="flex items-center gap-2">
+                <h1 className="text-xl font-semibold">Order {order.id}</h1>
+                <button
+                  type="button"
+                  onClick={handleCopyId}
+                  aria-label="Copy order ID"
+                  className="text-slate-400 transition-colors hover:text-navy-600"
+                >
+                  {copied ? <Check className="h-4 w-4 text-emerald-600" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
+                </button>
+              </div>
               <OrderStatusBadge status={order.status} />
             </div>
 
@@ -337,16 +358,18 @@ export function OrderDetailPage() {
                       type="button"
                       onClick={() => void handleManualAssign()}
                       disabled={assigning || !selectedAgentId}
-                      className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+                      className="flex items-center gap-1.5 rounded-md bg-navy-600 px-3 py-2 text-sm font-medium text-white hover:bg-navy-700 disabled:opacity-50"
                     >
+                      <UserCheck className="h-4 w-4" aria-hidden="true" />
                       {assigning ? 'Assigning…' : 'Assign'}
                     </button>
                     <button
                       type="button"
                       onClick={() => void handleAutoAssign()}
                       disabled={assigning}
-                      className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                      className="flex items-center gap-1.5 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
                     >
+                      <Truck className="h-4 w-4" aria-hidden="true" />
                       {assigning ? 'Assigning…' : 'Auto-assign'}
                     </button>
                   </div>
@@ -395,8 +418,9 @@ export function OrderDetailPage() {
                     <button
                       type="submit"
                       disabled={rescheduling || !requestedDate}
-                      className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+                      className="flex items-center gap-1.5 rounded-md bg-navy-600 px-3 py-2 text-sm font-medium text-white hover:bg-navy-700 disabled:opacity-50"
                     >
+                      <RotateCcw className="h-4 w-4" aria-hidden="true" />
                       {rescheduling ? 'Rescheduling…' : 'Reschedule'}
                     </button>
                   </form>
@@ -448,7 +472,7 @@ export function OrderDetailPage() {
       </div>
 
       {canViewTracking && (
-      <div className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="mt-6 rounded-lg border border-navy-100 bg-white p-6 shadow-sm">
         <h2 className="text-sm font-semibold text-slate-700">Tracking timeline</h2>
         <ErrorBanner message={eventsError} />
         {eventsLoading ? (
@@ -456,25 +480,41 @@ export function OrderDetailPage() {
         ) : events.length === 0 ? (
           <p className="mt-3 text-sm text-slate-500">No tracking events yet.</p>
         ) : (
-          <ol className="mt-4 space-y-3">
-            {events.map((event) => (
-              <li key={event.id} className="flex items-start justify-between border-l-2 border-slate-200 pl-3 text-sm">
-                <div>
-                  <p className="font-medium text-slate-900">
-                    {event.previous_status ? `${event.previous_status} → ${event.new_status}` : event.new_status}
-                  </p>
-                  <p className="text-xs text-slate-500">Actor: {event.actor_id}</p>
-                </div>
-                <span className="whitespace-nowrap text-xs text-slate-400">{new Date(event.created_at).toLocaleString()}</span>
-              </li>
-            ))}
+          <ol className="mt-4">
+            {events.map((event, i) => {
+              const Icon = STATUS_ICON[event.new_status]
+              const isCurrent = i === events.length - 1
+              return (
+                <li key={event.id} className="flex gap-4 pb-6 text-sm last:pb-0">
+                  <div className="flex flex-col items-center">
+                    <span
+                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white ${
+                        isCurrent ? 'bg-amber-500 ring-4 ring-amber-100' : 'bg-navy-600'
+                      }`}
+                    >
+                      <Icon className="h-4 w-4" aria-hidden="true" />
+                    </span>
+                    {i < events.length - 1 && <span className="mt-1 w-0.5 flex-1 bg-navy-100" aria-hidden="true" />}
+                  </div>
+                  <div className="flex flex-1 items-start justify-between pt-1">
+                    <div>
+                      <p className="font-medium text-slate-900">
+                        {event.previous_status ? `${event.previous_status} → ${event.new_status}` : event.new_status}
+                      </p>
+                      <p className="text-xs text-slate-500">Actor: {event.actor_id}</p>
+                    </div>
+                    <span className="whitespace-nowrap text-xs text-slate-400">{new Date(event.created_at).toLocaleString()}</span>
+                  </div>
+                </li>
+              )
+            })}
           </ol>
         )}
       </div>
       )}
 
       {canViewTracking && (
-      <div className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="mt-6 rounded-lg border border-navy-100 bg-white p-6 shadow-sm">
         <h2 className="text-sm font-semibold text-slate-700">Reschedule history</h2>
         <ErrorBanner message={reschedulesError} />
         {reschedulesLoading ? (
@@ -484,7 +524,7 @@ export function OrderDetailPage() {
         ) : (
           <ol className="mt-4 space-y-3">
             {reschedules.map((re) => (
-              <li key={re.id} className="flex items-start justify-between border-l-2 border-slate-200 pl-3 text-sm">
+              <li key={re.id} className="flex items-start justify-between border-l-2 border-navy-100 pl-3 text-sm">
                 <div>
                   <p className="font-medium text-slate-900">New date: {re.requested_date}</p>
                   {re.reason && <p className="text-xs text-slate-500">Reason: {re.reason}</p>}

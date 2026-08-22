@@ -1,3 +1,4 @@
+import { MapPin } from 'lucide-react'
 import { useEffect, useState, type FormEvent } from 'react'
 import { ErrorBanner } from '../../components/ErrorBanner'
 import { Layout } from '../../components/Layout'
@@ -197,9 +198,14 @@ export function ZonesPage() {
 
   return (
     <Layout>
-      <h1 className="text-xl font-semibold">Zones</h1>
+      <div className="flex items-center gap-2.5">
+        <span className="flex h-9 w-9 items-center justify-center rounded-md bg-navy-50 text-navy-600">
+          <MapPin className="h-5 w-5" aria-hidden="true" />
+        </span>
+        <h1 className="text-xl font-semibold">Zones</h1>
+      </div>
 
-      <div className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="mt-6 rounded-lg border border-navy-100 bg-white p-6 shadow-sm">
         <h2 className="text-sm font-semibold text-slate-700">Create a new zone</h2>
         <form onSubmit={handleCreateZone} className="mt-4 flex flex-wrap items-end gap-4">
           <ErrorBanner message={zoneCreateError} />
@@ -218,7 +224,7 @@ export function ZonesPage() {
           <button
             type="submit"
             disabled={creatingZone}
-            className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+            className="rounded-md bg-navy-600 px-4 py-2 text-sm font-medium text-white hover:bg-navy-700 disabled:opacity-50"
           >
             {creatingZone ? 'Creating…' : 'Create zone'}
           </button>
@@ -226,8 +232,8 @@ export function ZonesPage() {
       </div>
 
       <div className="mt-6 grid gap-6 md:grid-cols-2">
-        <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
-          <h2 className="border-b border-slate-200 px-6 py-4 text-sm font-semibold text-slate-700">All zones</h2>
+        <div className="rounded-lg border border-navy-100 bg-white shadow-sm">
+          <h2 className="border-b border-navy-100 px-6 py-4 text-sm font-semibold text-slate-700">All zones</h2>
           <ErrorBanner message={zonesError} />
           {zonesLoading ? (
             <p className="px-6 py-4 text-sm text-slate-500">Loading…</p>
@@ -240,8 +246,8 @@ export function ZonesPage() {
                   <button
                     type="button"
                     onClick={() => handleSelectZone(zone)}
-                    className={`flex w-full items-center justify-between px-6 py-3 text-left text-sm hover:bg-slate-50 ${
-                      zone.id === selectedZoneId ? 'bg-slate-50' : ''
+                    className={`flex w-full items-center justify-between px-6 py-3 text-left text-sm transition-colors hover:bg-navy-50 ${
+                      zone.id === selectedZoneId ? 'bg-navy-50' : ''
                     }`}
                   >
                     <span>{zone.name}</span>
@@ -253,12 +259,12 @@ export function ZonesPage() {
           )}
         </div>
 
-        <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
+        <div className="rounded-lg border border-navy-100 bg-white shadow-sm">
           {!selectedZone ? (
             <p className="px-6 py-8 text-center text-sm text-slate-500">Select a zone to manage its areas.</p>
           ) : (
             <>
-              <div className="border-b border-slate-200 px-6 py-4">
+              <div className="border-b border-navy-100 px-6 py-4">
                 <h2 className="text-sm font-semibold text-slate-700">Manage zone</h2>
                 <form onSubmit={handleRenameZone} className="mt-3 flex flex-wrap items-end gap-3">
                   <ErrorBanner message={zoneEditError} />
@@ -360,7 +366,7 @@ export function ZonesPage() {
                   <button
                     type="submit"
                     disabled={creatingArea}
-                    className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+                    className="rounded-md bg-navy-600 px-3 py-2 text-sm font-medium text-white hover:bg-navy-700 disabled:opacity-50"
                   >
                     {creatingArea ? 'Adding…' : 'Add area'}
                   </button>

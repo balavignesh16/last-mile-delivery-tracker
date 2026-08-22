@@ -45,8 +45,10 @@ describe('Layout', () => {
     mockAuth({ status: 'unauthenticated' })
     renderLayout()
 
-    expect(screen.getByRole('link', { name: 'Sign In' })).toBeTruthy()
-    expect(screen.getByRole('link', { name: 'Create Account' })).toBeTruthy()
+    // Both appear twice: once in the header nav, once in the Footer's
+    // unauthenticated CTA — assert presence, not a single unique match.
+    expect(screen.getAllByRole('link', { name: 'Sign In' }).length).toBeGreaterThan(0)
+    expect(screen.getAllByRole('link', { name: 'Create Account' }).length).toBeGreaterThan(0)
     expect(screen.queryByRole('button', { name: /log out/i })).toBeNull()
   })
 

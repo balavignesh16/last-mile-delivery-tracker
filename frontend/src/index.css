@@ -3,21 +3,30 @@
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
 
-  /* A single restrained brand accent, kept separate from the semantic
-     status colors (emerald/amber/red) StatusBadge/OrderStatusBadge use
-     — an accent and a semantic color answer different questions and
-     should never share a hue. Used sparingly: the landing hero, active
-     nav state, and links. */
-  --color-brand-50: #eef2ff;
-  --color-brand-100: #e0e7ff;
-  --color-brand-200: #c7d2fe;
-  --color-brand-500: #6366f1;
-  --color-brand-600: #4f46e5;
-  --color-brand-700: #4338ca;
+  /* Two-hue brand system, kept separate from the semantic status colors
+     (emerald/amber/red/blue) OrderStatusBadge/StatusBadge use — brand
+     identity and status meaning must never share a hue. Navy is the
+     primary (buttons, active nav, links, header/hero dark surfaces);
+     amber is a sparing accent (CTA highlights, active-state underline,
+     "in motion" cues) — never used for more than one persistent UI
+     element at a time. */
+  --color-navy-50: #eef3fa;
+  --color-navy-100: #d9e4f3;
+  --color-navy-200: #b0c6e6;
+  --color-navy-500: #2c4870;
+  --color-navy-600: #1e3a5f;
+  --color-navy-700: #16304f;
+  --color-navy-900: #0b1f3a;
+
+  --color-amber-50: #fffaeb;
+  --color-amber-100: #fef0c7;
+  --color-amber-500: #f59e0b;
+  --color-amber-600: #d97706;
 }
 
 body {
   font-family: var(--font-sans);
+  background-color: var(--color-navy-50);
 }
 
 /* A visible, consistent keyboard-focus ring on every interactive
@@ -30,7 +39,7 @@ body {
   input:focus-visible,
   select:focus-visible,
   textarea:focus-visible {
-    outline: 2px solid var(--color-brand-500);
+    outline: 2px solid var(--color-amber-500);
     outline-offset: 2px;
   }
 }
@@ -48,6 +57,25 @@ body {
 
 .page-fade-in {
   animation: page-fade-in 0.2s ease-out;
+}
+
+/* One node in the landing/auth "flow strip" visual pulses gently to
+   suggest motion — the only ambient animation in the app, capped at a
+   slow, unobtrusive cadence and disabled below under reduced-motion. */
+@keyframes flow-pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(1.15);
+  }
+}
+
+.flow-pulse {
+  animation: flow-pulse 2s ease-in-out infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {

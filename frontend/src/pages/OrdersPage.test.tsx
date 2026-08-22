@@ -40,6 +40,7 @@ const order = {
   zone_relationship: 'INTRA',
   final_amount: 70,
   status: 'CREATED',
+  created_at: '2026-01-01T00:00:00Z',
 }
 
 describe('OrdersPage', () => {
@@ -71,7 +72,11 @@ describe('OrdersPage', () => {
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getByText(/B2C · INTRA · COD/)).toBeTruthy())
+    // Now rendered as separate table columns rather than one combined
+    // text node — Order (order_type + id), Route, Payment, Amount.
+    await waitFor(() => expect(screen.getByText(/B2C · order-1/)).toBeTruthy())
+    expect(screen.getByText('INTRA')).toBeTruthy()
+    expect(screen.getByText('COD')).toBeTruthy()
     expect(screen.getByText('₹70.00')).toBeTruthy()
   })
 

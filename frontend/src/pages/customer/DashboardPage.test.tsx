@@ -1,12 +1,16 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AuthContextValue } from '../../contexts/auth-context'
 import { useAuth } from '../../hooks/useAuth'
 import type { UserProfile } from '../../types/auth'
 import { DashboardPage } from './DashboardPage'
 
 vi.mock('../../hooks/useAuth')
+
+function jsonResponse(status: number, body: unknown): Response {
+  return { ok: status >= 200 && status < 300, status, json: async () => body } as Response
+}
 
 function mockAuth() {
   const user: UserProfile = {
@@ -29,8 +33,13 @@ function mockAuth() {
 }
 
 describe('customer DashboardPage', () => {
-  it('renders a personalized greeting and links to Create order and My orders', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('renders a personalized greeting and links to Create order and My orders', async () => {
     mockAuth()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, [])))
 
     render(
       <MemoryRouter>
@@ -43,10 +52,12 @@ describe('customer DashboardPage', () => {
     const ordersLink = screen.getByRole('link', { name: /My orders/ })
     expect(createLink.getAttribute('href')).toBe('/orders/new')
     expect(ordersLink.getAttribute('href')).toBe('/orders')
+    await waitFor(() => expect(screen.getByText('Active orders')).toBeTruthy())
   })
 
-  it('shows no admin- or agent-only content', () => {
+  it('shows no admin- or agent-only content', async () => {
     mockAuth()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, [])))
 
     render(
       <MemoryRouter>
@@ -58,5 +69,41 @@ describe('customer DashboardPage', () => {
     expect(screen.queryByText('Rate cards')).toBeNull()
     expect(screen.queryByText('Availability & location')).toBeNull()
     expect(screen.queryByText('Order statistics')).toBeNull()
+    await waitFor(() => expect(screen.getByText('Active orders')).toBeTruthy())
+  })
+
+  it('computes active/delivered counts from real order data', async () => {
+    mockAuth()
+    const orders = [
+      { id: 'o-1', status: 'DELIVERED' },
+      { id: 'o-2', status: 'DELIVERED' },
+      { id: 'o-3', status: 'IN_TRANSIT' },
+    ]
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, orders)))
+
+    render(
+      <MemoryRouter>
+        <DashboardPage />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText('Active orders')).toBeTruthy())
+    const activeCount = screen.getByText('Active orders').nextElementSibling
+    expect(activeCount?.textContent).toBe('1')
+    const deliveredCount = screen.getByText('Delivered').nextElementSibling
+    expect(deliveredCount?.textContent).toBe('2')
+  })
+
+  it('shows an error banner when the order summary fails to load', async () => {
+    mockAuth()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(500, { error: 'could not list orders' })))
+
+    render(
+      <MemoryRouter>
+        <DashboardPage />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText('could not list orders')).toBeTruthy())
   })
 })

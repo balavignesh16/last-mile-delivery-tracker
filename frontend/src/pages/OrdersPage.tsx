@@ -1,5 +1,6 @@
+import { PackageOpen, PackagePlus } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { Layout } from '../components/Layout'
 import { OrderStatusBadge } from '../components/OrderStatusBadge'
@@ -22,6 +23,7 @@ import { formatCurrency } from '../utils/currency'
 // ever renders the filter controls for an ADMIN viewer.
 export function OrdersPage() {
   const { token, user } = useAuth()
+  const navigate = useNavigate()
   const isAdmin = user?.role === 'ADMIN'
   const isDeliveryAgent = user?.role === 'DELIVERY_AGENT'
 
@@ -87,14 +89,18 @@ export function OrdersPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">{isAdmin ? 'All orders' : isDeliveryAgent ? 'My assigned orders' : 'My orders'}</h1>
         {!isDeliveryAgent && (
-          <Link to="/orders/new" className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700">
+          <Link
+            to="/orders/new"
+            className="flex items-center gap-1.5 rounded-md bg-navy-600 px-3 py-2 text-sm font-medium text-white hover:bg-navy-700"
+          >
+            <PackagePlus className="h-4 w-4" aria-hidden="true" />
             New order
           </Link>
         )}
       </div>
 
       {isAdmin && (
-        <div className="mt-4 flex flex-wrap items-end gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="mt-4 flex flex-wrap items-end gap-3 rounded-lg border border-navy-100 bg-white p-4 shadow-sm">
           <div>
             <label htmlFor="status-filter" className="block text-xs font-medium text-slate-500">
               Status
@@ -165,7 +171,7 @@ export function OrdersPage() {
         </div>
       )}
 
-      <div className="mt-6 overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+      <div className="mt-6 overflow-hidden rounded-lg border border-navy-100 bg-white shadow-sm">
         <ErrorBanner message={error} />
         {loading ? (
           <div className="space-y-3 p-6">
@@ -174,29 +180,50 @@ export function OrdersPage() {
             ))}
           </div>
         ) : orders.length === 0 ? (
-          <div className="px-6 py-12 text-center">
-            <p className="text-sm font-medium text-slate-700">{hasActiveFilter ? 'No orders match these filters.' : 'No orders yet.'}</p>
+          <div className="px-6 py-14 text-center">
+            <PackageOpen className="mx-auto h-10 w-10 text-slate-300" aria-hidden="true" />
+            <p className="mt-3 text-sm font-medium text-slate-700">{hasActiveFilter ? 'No orders match these filters.' : 'No orders yet.'}</p>
             <p className="mt-1 text-sm text-slate-500">
               {hasActiveFilter ? 'Try clearing a filter to see more results.' : 'Your orders will appear here once you create a delivery.'}
             </p>
           </div>
         ) : (
-          <ul>
-            {orders.map((o) => (
-              <li key={o.id} className="border-t border-slate-100 first:border-t-0">
-                <Link
-                  to={`/orders/${o.id}`}
-                  className="flex items-center justify-between gap-4 px-6 py-4 text-sm transition-colors hover:bg-slate-50"
-                >
-                  <span className="text-slate-700">
-                    {o.order_type} · {o.zone_relationship} · {o.payment_type}
-                    <span className="ml-2 font-medium text-slate-900">{formatCurrency(o.final_amount)}</span>
-                  </span>
-                  <OrderStatusBadge status={o.status} />
-                </Link>
-              </li>
-            ))}
-          </ul>
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="border-b border-navy-100 bg-navy-50/60 text-xs font-medium tracking-wide text-navy-700 uppercase">
+                <tr>
+                  <th className="px-6 py-3">Order</th>
+                  <th className="px-6 py-3">Route</th>
+                  <th className="px-6 py-3">Payment</th>
+                  <th className="px-6 py-3">Amount</th>
+                  <th className="px-6 py-3">Status</th>
+                  <th className="px-6 py-3">Placed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orders.map((o) => (
+                  <tr
+                    key={o.id}
+                    onClick={() => navigate(`/orders/${o.id}`)}
+                    className="cursor-pointer border-t border-slate-100 transition-colors hover:bg-navy-50/50"
+                  >
+                    <td className="px-6 py-3.5">
+                      <Link to={`/orders/${o.id}`} className="font-medium text-navy-700 hover:underline">
+                        {o.order_type} · {o.id.slice(0, 8)}
+                      </Link>
+                    </td>
+                    <td className="px-6 py-3.5 text-slate-600">{o.zone_relationship}</td>
+                    <td className="px-6 py-3.5 text-slate-600">{o.payment_type}</td>
+                    <td className="px-6 py-3.5 font-medium tabular-nums text-slate-900">{formatCurrency(o.final_amount)}</td>
+                    <td className="px-6 py-3.5">
+                      <OrderStatusBadge status={o.status} />
+                    </td>
+                    <td className="px-6 py-3.5 whitespace-nowrap text-slate-500">{new Date(o.created_at).toLocaleDateString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
     </Layout>

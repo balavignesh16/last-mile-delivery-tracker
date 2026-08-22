@@ -216,7 +216,7 @@ export function CreateOrderPage() {
         recalculates the price itself — the preview is never sent back as a trusted amount.
       </p>
 
-      <form onSubmit={handlePreview} className="mt-6 space-y-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+      <form onSubmit={handlePreview} className="mt-6 space-y-6 rounded-lg border border-navy-100 bg-white p-6 shadow-sm">
         <ErrorBanner message={zonesError} />
         <ErrorBanner message={previewError} />
 
@@ -395,7 +395,7 @@ export function CreateOrderPage() {
       </form>
 
       {preview && (
-        <div className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm" role="status">
+        <div className="mt-6 rounded-lg border border-navy-100 bg-white p-6 shadow-sm" role="status">
           <h2 className="text-sm font-semibold text-slate-700">Quote preview</h2>
           <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-2 text-sm sm:grid-cols-3">
             <div>
@@ -417,7 +417,7 @@ export function CreateOrderPage() {
             type="button"
             onClick={() => void handleConfirm()}
             disabled={confirming}
-            className="mt-4 rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+            className="mt-4 rounded-md bg-navy-600 px-4 py-2 text-sm font-medium text-white hover:bg-navy-700 disabled:opacity-50"
           >
             {confirming ? 'Placing order…' : 'Confirm & place order'}
           </button>

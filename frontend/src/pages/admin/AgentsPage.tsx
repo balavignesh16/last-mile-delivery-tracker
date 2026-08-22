@@ -1,3 +1,4 @@
+import { Users } from 'lucide-react'
 import { useEffect, useState, type FormEvent } from 'react'
 import { ErrorBanner } from '../../components/ErrorBanner'
 import { Layout } from '../../components/Layout'
@@ -79,9 +80,14 @@ export function AgentsPage() {
 
   return (
     <Layout>
-      <h1 className="text-xl font-semibold">Delivery Agents</h1>
+      <div className="flex items-center gap-2.5">
+        <span className="flex h-9 w-9 items-center justify-center rounded-md bg-navy-50 text-navy-600">
+          <Users className="h-5 w-5" aria-hidden="true" />
+        </span>
+        <h1 className="text-xl font-semibold">Delivery Agents</h1>
+      </div>
 
-      <div className="mt-6 rounded-lg border border-slate-200 bg-white p-6 shadow-sm">
+      <div className="mt-6 rounded-lg border border-navy-100 bg-white p-6 shadow-sm">
         <h2 className="text-sm font-semibold text-slate-700">Provision a new agent</h2>
         <form onSubmit={handleCreate} className="mt-4 grid gap-4 sm:grid-cols-2">
           <ErrorBanner message={createError} />
@@ -142,7 +148,7 @@ export function AgentsPage() {
             <button
               type="submit"
               disabled={creating}
-              className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+              className="rounded-md bg-navy-600 px-4 py-2 text-sm font-medium text-white hover:bg-navy-700 disabled:opacity-50"
             >
               {creating ? 'Creating…' : 'Create agent'}
             </button>
@@ -150,8 +156,8 @@ export function AgentsPage() {
         </form>
       </div>
 
-      <div className="mt-6 rounded-lg border border-slate-200 bg-white shadow-sm">
-        <h2 className="border-b border-slate-200 px-6 py-4 text-sm font-semibold text-slate-700">
+      <div className="mt-6 rounded-lg border border-navy-100 bg-white shadow-sm">
+        <h2 className="border-b border-navy-100 px-6 py-4 text-sm font-semibold text-slate-700">
           All agents
         </h2>
         <ErrorBanner message={loadError} />
@@ -162,18 +168,18 @@ export function AgentsPage() {
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
-              <thead className="text-xs uppercase tracking-wide text-slate-500">
+              <thead className="border-b border-navy-100 bg-navy-50/60 text-xs font-medium tracking-wide text-navy-700 uppercase">
                 <tr>
-                  <th className="px-6 py-2">Name</th>
-                  <th className="px-6 py-2">Email</th>
-                  <th className="px-6 py-2">Availability</th>
-                  <th className="px-6 py-2">Location</th>
-                  <th className="px-6 py-2">Active</th>
+                  <th className="px-6 py-3">Name</th>
+                  <th className="px-6 py-3">Email</th>
+                  <th className="px-6 py-3">Availability</th>
+                  <th className="px-6 py-3">Location</th>
+                  <th className="px-6 py-3">Active</th>
                 </tr>
               </thead>
               <tbody>
                 {agents.map((agent) => (
-                  <tr key={agent.id} className="border-t border-slate-100">
+                  <tr key={agent.id} className="border-t border-slate-100 transition-colors hover:bg-navy-50/40">
                     <td className="px-6 py-3">{agent.full_name}</td>
                     <td className="px-6 py-3 text-slate-500">{agent.email}</td>
                     <td className="px-6 py-3">
