@@ -63,7 +63,7 @@ func TestTransitionHandler_ValidTransitionByAdmin(t *testing.T) {
 	repo := newFakeRepo()
 	repo.seedOrder("order-1", "customer-1", StatusCreated)
 
-	rec := doRequest(t, withAuth(t, "admin-1", users.RoleAdmin, TransitionHandler(repo)),
+	rec := doRequest(t, withAuth(t, "admin-1", users.RoleAdmin, TransitionHandler(repo, nil)),
 		http.MethodPost, "/api/v1/orders/order-1/status", `{"status":"ASSIGNED"}`, map[string]string{"id": "order-1"})
 
 	if rec.Code != http.StatusCreated {
@@ -87,11 +87,55 @@ func TestTransitionHandler_ValidTransitionByAdmin(t *testing.T) {
 	}
 }
 
+// --- M11: TransitionHook ---
+
+func TestTransitionHandler_TransitionHookFiresAfterSuccess(t *testing.T) {
+	repo := newFakeRepo()
+	repo.seedOrder("order-1", "customer-1", StatusCreated)
+
+	var got Event
+	hookCalls := 0
+	hook := func(_ context.Context, e Event) {
+		hookCalls++
+		got = e
+	}
+
+	rec := doRequest(t, withAuth(t, "admin-1", users.RoleAdmin, TransitionHandler(repo, hook)),
+		http.MethodPost, "/api/v1/orders/order-1/status", `{"status":"ASSIGNED"}`, map[string]string{"id": "order-1"})
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	if hookCalls != 1 {
+		t.Fatalf("hook calls = %d, want 1", hookCalls)
+	}
+	if got.NewStatus != "ASSIGNED" || got.OrderID != "order-1" {
+		t.Errorf("hook event = %+v, want NewStatus=ASSIGNED OrderID=order-1", got)
+	}
+}
+
+func TestTransitionHandler_TransitionHookNotCalledOnRejectedTransition(t *testing.T) {
+	repo := newFakeRepo()
+	repo.seedOrder("order-1", "customer-1", StatusCreated)
+	hookCalls := 0
+	hook := func(_ context.Context, _ Event) { hookCalls++ }
+
+	rec := doRequest(t, withAuth(t, "admin-1", users.RoleAdmin, TransitionHandler(repo, hook)),
+		http.MethodPost, "/api/v1/orders/order-1/status", `{"status":"DELIVERED"}`, map[string]string{"id": "order-1"})
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	if hookCalls != 0 {
+		t.Errorf("hook calls = %d, want 0 (transition was rejected, nothing committed)", hookCalls)
+	}
+}
+
 func TestTransitionHandler_ValidTransitionByAgent(t *testing.T) {
 	repo := newFakeRepo()
 	repo.seedOrder("order-1", "customer-1", StatusAssigned)
 
-	rec := doRequest(t, withAuth(t, "agent-1", users.RoleDeliveryAgent, TransitionHandler(repo)),
+	rec := doRequest(t, withAuth(t, "agent-1", users.RoleDeliveryAgent, TransitionHandler(repo, nil)),
 		http.MethodPost, "/api/v1/orders/order-1/status", `{"status":"PICKED_UP"}`, map[string]string{"id": "order-1"})
 
 	if rec.Code != http.StatusCreated {
@@ -107,7 +151,7 @@ func TestTransitionHandler_InvalidJumpRejected(t *testing.T) {
 	repo := newFakeRepo()
 	repo.seedOrder("order-1", "customer-1", StatusCreated)
 
-	rec := doRequest(t, withAuth(t, "admin-1", users.RoleAdmin, TransitionHandler(repo)),
+	rec := doRequest(t, withAuth(t, "admin-1", users.RoleAdmin, TransitionHandler(repo, nil)),
 		http.MethodPost, "/api/v1/orders/order-1/status", `{"status":"DELIVERED"}`, map[string]string{"id": "order-1"})
 
 	if rec.Code != http.StatusConflict {
@@ -119,7 +163,7 @@ func TestTransitionHandler_SameStatusRejected(t *testing.T) {
 	repo := newFakeRepo()
 	repo.seedOrder("order-1", "customer-1", StatusAssigned)
 
-	rec := doRequest(t, withAuth(t, "admin-1", users.RoleAdmin, TransitionHandler(repo)),
+	rec := doRequest(t, withAuth(t, "admin-1", users.RoleAdmin, TransitionHandler(repo, nil)),
 		http.MethodPost, "/api/v1/orders/order-1/status", `{"status":"ASSIGNED"}`, map[string]string{"id": "order-1"})
 
 	if rec.Code != http.StatusConflict {
@@ -131,7 +175,7 @@ func TestTransitionHandler_UnknownStatusValueRejected(t *testing.T) {
 	repo := newFakeRepo()
 	repo.seedOrder("order-1", "customer-1", StatusCreated)
 
-	rec := doRequest(t, withAuth(t, "admin-1", users.RoleAdmin, TransitionHandler(repo)),
+	rec := doRequest(t, withAuth(t, "admin-1", users.RoleAdmin, TransitionHandler(repo, nil)),
 		http.MethodPost, "/api/v1/orders/order-1/status", `{"status":"SHIPPED"}`, map[string]string{"id": "order-1"})
 
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -143,7 +187,7 @@ func TestTransitionHandler_AgentForbiddenFromAdminOnlyEdge(t *testing.T) {
 	repo := newFakeRepo()
 	repo.seedOrder("order-1", "customer-1", StatusCreated)
 
-	rec := doRequest(t, withAuth(t, "agent-1", users.RoleDeliveryAgent, TransitionHandler(repo)),
+	rec := doRequest(t, withAuth(t, "agent-1", users.RoleDeliveryAgent, TransitionHandler(repo, nil)),
 		http.MethodPost, "/api/v1/orders/order-1/status", `{"status":"ASSIGNED"}`, map[string]string{"id": "order-1"})
 
 	if rec.Code != http.StatusForbidden {
@@ -155,7 +199,7 @@ func TestTransitionHandler_AgentForbiddenFromRescheduleEdge(t *testing.T) {
 	repo := newFakeRepo()
 	repo.seedOrder("order-1", "customer-1", StatusFailed)
 
-	rec := doRequest(t, withAuth(t, "agent-1", users.RoleDeliveryAgent, TransitionHandler(repo)),
+	rec := doRequest(t, withAuth(t, "agent-1", users.RoleDeliveryAgent, TransitionHandler(repo, nil)),
 		http.MethodPost, "/api/v1/orders/order-1/status", `{"status":"RESCHEDULED"}`, map[string]string{"id": "order-1"})
 
 	if rec.Code != http.StatusForbidden {
@@ -166,7 +210,7 @@ func TestTransitionHandler_AgentForbiddenFromRescheduleEdge(t *testing.T) {
 func TestTransitionHandler_UnknownOrderRejected(t *testing.T) {
 	repo := newFakeRepo()
 
-	rec := doRequest(t, withAuth(t, "admin-1", users.RoleAdmin, TransitionHandler(repo)),
+	rec := doRequest(t, withAuth(t, "admin-1", users.RoleAdmin, TransitionHandler(repo, nil)),
 		http.MethodPost, "/api/v1/orders/does-not-exist/status", `{"status":"ASSIGNED"}`, map[string]string{"id": "does-not-exist"})
 
 	if rec.Code != http.StatusNotFound {
@@ -178,7 +222,7 @@ func TestTransitionHandler_MetadataPassedThrough(t *testing.T) {
 	repo := newFakeRepo()
 	repo.seedOrder("order-1", "customer-1", StatusOutForDelivery)
 
-	rec := doRequest(t, withAuth(t, "agent-1", users.RoleDeliveryAgent, TransitionHandler(repo)),
+	rec := doRequest(t, withAuth(t, "agent-1", users.RoleDeliveryAgent, TransitionHandler(repo, nil)),
 		http.MethodPost, "/api/v1/orders/order-1/status", `{"status":"FAILED","metadata":{"reason":"customer not home"}}`, map[string]string{"id": "order-1"})
 
 	if rec.Code != http.StatusCreated {
@@ -198,7 +242,7 @@ func TestTransitionHandler_OmittedMetadataIsNull(t *testing.T) {
 	repo := newFakeRepo()
 	repo.seedOrder("order-1", "customer-1", StatusCreated)
 
-	rec := doRequest(t, withAuth(t, "admin-1", users.RoleAdmin, TransitionHandler(repo)),
+	rec := doRequest(t, withAuth(t, "admin-1", users.RoleAdmin, TransitionHandler(repo, nil)),
 		http.MethodPost, "/api/v1/orders/order-1/status", `{"status":"ASSIGNED"}`, map[string]string{"id": "order-1"})
 
 	body := decodeJSON[map[string]any](t, rec)
@@ -227,7 +271,7 @@ func TestTransitionHandler_ServerDerivedFieldsRejected(t *testing.T) {
 	for _, field := range forbidden {
 		t.Run(field, func(t *testing.T) {
 			body := `{"status":"ASSIGNED",` + field + `}`
-			rec := doRequest(t, withAuth(t, "admin-1", users.RoleAdmin, TransitionHandler(repo)),
+			rec := doRequest(t, withAuth(t, "admin-1", users.RoleAdmin, TransitionHandler(repo, nil)),
 				http.MethodPost, "/api/v1/orders/order-1/status", body, map[string]string{"id": "order-1"})
 			if rec.Code != http.StatusUnprocessableEntity {
 				t.Errorf("status = %d, want %d (unknown field must be rejected), body: %s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())

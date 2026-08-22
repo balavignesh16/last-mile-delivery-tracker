@@ -8,6 +8,7 @@
 package orders
 
 import (
+	"context"
 	"time"
 
 	"lastmiletracker/internal/rates"
@@ -74,3 +75,13 @@ type CreateOrderInput struct {
 	CreatedBy  string
 	Quote      rates.QuoteResult
 }
+
+// OrderCreatedHook is called with the id of a newly created order,
+// strictly after CreateOrder's own transaction has already committed —
+// a purely additive, post-commit extension point for M11's notification
+// service (or any future consumer) to observe order creation without
+// this package depending on it (avoiding an import cycle, since M11
+// needs to depend on this package for Repository/Order, not the other
+// way around). Nil is always safe — CreateOrderHandler checks for nil
+// before invoking it, so nothing here is required to wire.
+type OrderCreatedHook func(ctx context.Context, orderID string)

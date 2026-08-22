@@ -57,7 +57,7 @@ func setupOrdersTest(t *testing.T) (router http.Handler, usersRepo users.Reposit
 		auth.Mount(uRepo, agentsIntegrationJWTSecret),
 		zones.Mount(zRepo, agentsIntegrationJWTSecret),
 		rates.Mount(rRepo, zRepo, agentsIntegrationJWTSecret),
-		orders.Mount(oRepo, uRepo, zRepo, rRepo, aRepo, agentsIntegrationJWTSecret),
+		orders.Mount(oRepo, uRepo, zRepo, rRepo, aRepo, agentsIntegrationJWTSecret, nil),
 	)
 	return r, uRepo, zRepo, rRepo, oRepo, p
 }

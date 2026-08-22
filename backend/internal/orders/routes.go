@@ -23,8 +23,9 @@ import (
 // agentsRepo is a new dependency of both GET handlers, needed only to
 // resolve a DELIVERY_AGENT caller's own agent id from their JWT's user
 // id; usersRepo/zonesRepo/ratesRepo remain CreateOrderHandler's
-// dependencies exactly as in M07.
-func Mount(ordersRepo Repository, usersRepo users.Repository, zonesRepo zones.Repository, ratesRepo rates.Repository, agentsRepo agents.Repository, jwtSecret string) func(chi.Router) {
+// dependencies exactly as in M07. onOrderCreated (M11) is nil-safe —
+// see OrderCreatedHook's own doc comment.
+func Mount(ordersRepo Repository, usersRepo users.Repository, zonesRepo zones.Repository, ratesRepo rates.Repository, agentsRepo agents.Repository, jwtSecret string, onOrderCreated OrderCreatedHook) func(chi.Router) {
 	return func(v1 chi.Router) {
 		createRoles := func(r chi.Router) chi.Router {
 			return r.With(auth.RequireAuth(jwtSecret), auth.RequireRole(users.RoleAdmin, users.RoleCustomer))
@@ -33,7 +34,7 @@ func Mount(ordersRepo Repository, usersRepo users.Repository, zonesRepo zones.Re
 			return r.With(auth.RequireAuth(jwtSecret), auth.RequireRole(users.RoleAdmin, users.RoleCustomer, users.RoleDeliveryAgent))
 		}
 
-		createRoles(v1).Post("/orders", CreateOrderHandler(ordersRepo, usersRepo, zonesRepo, ratesRepo))
+		createRoles(v1).Post("/orders", CreateOrderHandler(ordersRepo, usersRepo, zonesRepo, ratesRepo, onOrderCreated))
 		readRoles(v1).Get("/orders", ListOrdersHandler(ordersRepo, agentsRepo))
 		readRoles(v1).Get("/orders/{id}", GetOrderHandler(ordersRepo, agentsRepo))
 	}

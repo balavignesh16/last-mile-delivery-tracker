@@ -109,7 +109,49 @@ func newFixture() *fixture {
 }
 
 func (f *fixture) createHandler() http.HandlerFunc {
-	return CreateOrderHandler(f.ordersRepo, f.usersRepo, f.zonesRepo, f.ratesRepo)
+	return CreateOrderHandler(f.ordersRepo, f.usersRepo, f.zonesRepo, f.ratesRepo, nil)
+}
+
+// --- M11: OrderCreatedHook ---
+
+func TestCreateOrderHandler_OrderCreatedHookFiresAfterSuccess(t *testing.T) {
+	f := newFixture()
+	var gotOrderID string
+	hookCalls := 0
+	hook := func(_ context.Context, orderID string) {
+		hookCalls++
+		gotOrderID = orderID
+	}
+
+	rec := doRequest(t, withAuth(t, f.customer.ID, users.RoleCustomer, CreateOrderHandler(f.ordersRepo, f.usersRepo, f.zonesRepo, f.ratesRepo, hook)),
+		http.MethodPost, "/api/v1/orders", validCustomerBody(f.areaID, f.areaID), nil)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	body := decodeJSON[map[string]any](t, rec)
+	if hookCalls != 1 {
+		t.Fatalf("hook calls = %d, want 1", hookCalls)
+	}
+	if gotOrderID != body["id"] {
+		t.Errorf("hook order id = %q, want %v (the created order's own id)", gotOrderID, body["id"])
+	}
+}
+
+func TestCreateOrderHandler_OrderCreatedHookNotCalledOnValidationFailure(t *testing.T) {
+	f := newFixture()
+	hookCalls := 0
+	hook := func(_ context.Context, _ string) { hookCalls++ }
+
+	rec := doRequest(t, withAuth(t, f.customer.ID, users.RoleCustomer, CreateOrderHandler(f.ordersRepo, f.usersRepo, f.zonesRepo, f.ratesRepo, hook)),
+		http.MethodPost, "/api/v1/orders", `{"pickup_area_id":"does-not-exist","drop_area_id":"does-not-exist","order_type":"B2C","payment_type":"COD","length_cm":1,"breadth_cm":1,"height_cm":1,"actual_weight_kg":1}`, nil)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
+	}
+	if hookCalls != 0 {
+		t.Errorf("hook calls = %d, want 0 (order was never created)", hookCalls)
+	}
 }
 
 func (f *fixture) listHandler() http.HandlerFunc {
@@ -316,7 +358,7 @@ func TestCreateOrderHandler_MissingSlabRejected(t *testing.T) {
 		{MinWeight: 0, MaxWeight: mustFloat(5), Price: 50},
 	})
 
-	handler := CreateOrderHandler(oRepo, uRepo, zRepo, rRepo)
+	handler := CreateOrderHandler(oRepo, uRepo, zRepo, rRepo, nil)
 	body := `{"pickup_area_id":"` + area.ID + `","drop_area_id":"` + area.ID + `","order_type":"B2C","payment_type":"COD","length_cm":1,"breadth_cm":1,"height_cm":1,"actual_weight_kg":50}`
 	rec := doRequest(t, withAuth(t, customer.ID, users.RoleCustomer, handler), http.MethodPost, "/api/v1/orders", body, nil)
 	if rec.Code != http.StatusUnprocessableEntity {

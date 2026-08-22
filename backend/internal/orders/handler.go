@@ -137,7 +137,12 @@ type adminCreateOrderRequest struct {
 // re-implemented here) -> persist the returned QuoteResult verbatim ->
 // respond with the created order. No client-supplied price is ever
 // trusted, and no pricing field is ever computed by this function.
-func CreateOrderHandler(ordersRepo Repository, usersRepo users.Repository, zonesRepo zones.Repository, ratesRepo rates.Repository) http.HandlerFunc {
+// onOrderCreated is nil-safe (see OrderCreatedHook's own doc comment)
+// — M11's notification service is wired in as this hook by main.go,
+// but this handler has no dependency on that package at all; passing
+// nil (as every test in this file does) skips the call entirely with
+// zero behavior change to anything else this handler does.
+func CreateOrderHandler(ordersRepo Repository, usersRepo users.Repository, zonesRepo zones.Repository, ratesRepo rates.Repository, onOrderCreated OrderCreatedHook) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		identity, ok := auth.IdentityFromContext(r.Context())
 		if !ok {
@@ -230,6 +235,15 @@ func CreateOrderHandler(ordersRepo Repository, usersRepo users.Repository, zones
 			slog.Error("order creation failed", "error", err)
 			server.WriteError(w, http.StatusInternalServerError, "could not create order")
 			return
+		}
+
+		// Fires strictly after CreateOrder's own transaction has already
+		// committed (see OrderCreatedHook's doc comment) — a provider
+		// failure inside the hook can never affect the 201 response
+		// below, since that response reflects state that is already
+		// durably persisted regardless of what this call does.
+		if onOrderCreated != nil {
+			onOrderCreated(r.Context(), created.ID)
 		}
 
 		server.WriteJSON(w, http.StatusCreated, ToOrderResponse(created))

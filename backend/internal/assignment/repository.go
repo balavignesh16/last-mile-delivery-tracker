@@ -48,10 +48,14 @@ type PostgresRepository struct {
 	agentsRepo   agents.Repository
 	ordersRepo   orders.Repository
 	trackingRepo tracking.Repository
+	// onTransition (M11) is nil-safe — see tracking.TransitionHook's own
+	// doc comment. Wired in by main.go; this package has no dependency
+	// on internal/notifications at all.
+	onTransition tracking.TransitionHook
 }
 
-func NewPostgresRepository(pool *pgxpool.Pool, agentsRepo agents.Repository, ordersRepo orders.Repository, trackingRepo tracking.Repository) *PostgresRepository {
-	return &PostgresRepository{pool: pool, agentsRepo: agentsRepo, ordersRepo: ordersRepo, trackingRepo: trackingRepo}
+func NewPostgresRepository(pool *pgxpool.Pool, agentsRepo agents.Repository, ordersRepo orders.Repository, trackingRepo tracking.Repository, onTransition tracking.TransitionHook) *PostgresRepository {
+	return &PostgresRepository{pool: pool, agentsRepo: agentsRepo, ordersRepo: ordersRepo, trackingRepo: trackingRepo, onTransition: onTransition}
 }
 
 // assignmentMetadata builds the {"assigned_agent_id": "..."} payload
@@ -98,7 +102,8 @@ func (r *PostgresRepository) Assign(ctx context.Context, orderID, agentID, actor
 		return orders.Order{}, ErrAgentNotEligible
 	}
 
-	if _, err := r.trackingRepo.TransitionTx(ctx, tx, orderID, actorID, actorRole, tracking.StatusAssigned, assignmentMetadata(agentID)); err != nil {
+	event, err := r.trackingRepo.TransitionTx(ctx, tx, orderID, actorID, actorRole, tracking.StatusAssigned, assignmentMetadata(agentID))
+	if err != nil {
 		return orders.Order{}, mapTrackingError(err)
 	}
 
@@ -114,6 +119,13 @@ func (r *PostgresRepository) Assign(ctx context.Context, orderID, agentID, actor
 	if err := tx.Commit(ctx); err != nil {
 		return orders.Order{}, fmt.Errorf("commit assignment: %w", err)
 	}
+
+	// Fires strictly after the transaction above has already committed
+	// — see tracking.TransitionHook's doc comment.
+	if r.onTransition != nil {
+		r.onTransition(ctx, event)
+	}
+
 	return updated, nil
 }
 
@@ -175,7 +187,8 @@ func (r *PostgresRepository) AutoAssign(ctx context.Context, orderID, actorID st
 			continue
 		}
 
-		if _, err := r.trackingRepo.TransitionTx(ctx, tx, orderID, actorID, actorRole, tracking.StatusAssigned, assignmentMetadata(locked.AgentID)); err != nil {
+		event, err := r.trackingRepo.TransitionTx(ctx, tx, orderID, actorID, actorRole, tracking.StatusAssigned, assignmentMetadata(locked.AgentID))
+		if err != nil {
 			return orders.Order{}, mapTrackingError(err)
 		}
 		if err := writeAssignment(ctx, tx, orderID, locked.AgentID); err != nil {
@@ -188,6 +201,13 @@ func (r *PostgresRepository) AutoAssign(ctx context.Context, orderID, actorID st
 		if err := tx.Commit(ctx); err != nil {
 			return orders.Order{}, fmt.Errorf("commit auto-assignment: %w", err)
 		}
+
+		// Fires strictly after the transaction above has already
+		// committed — see tracking.TransitionHook's doc comment.
+		if r.onTransition != nil {
+			r.onTransition(ctx, event)
+		}
+
 		return updated, nil
 	}
 }

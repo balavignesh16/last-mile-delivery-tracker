@@ -648,6 +648,22 @@ curl http://localhost:8080/api/v1/orders/$ORDER_ID/reschedules -H "Authorization
 
 ---
 
+## Notifications (M11)
+
+**M11 intentionally adds no REST API.** There is no `GET
+/notifications`, no per-order notification history endpoint, and no
+admin notification console — this is a deliberate scope decision, not
+an omission. The Notification Service reacts internally to eight
+order-lifecycle events (`ORDER_CREATED`, `AGENT_ASSIGNED`, `PICKED_UP`,
+`IN_TRANSIT`, `OUT_FOR_DELIVERY`, `DELIVERED`, `FAILED`,
+`RESCHEDULED`) by emailing (always) and texting (when a phone number is
+on file) the order's own customer, entirely as a synchronous,
+post-commit side effect of the endpoints already documented above —
+`POST /orders`, `POST /orders/:id/status`, `POST /orders/:id/assign`
+and `/auto-assign`, and `POST /orders/:id/reschedule`. None of those
+endpoints' request/response shapes changed for M11. See
+`docs/notifications.md` for the full design.
+
 ## What's not here yet
 
-Notifications and dashboards — M11 and M12. This file grows with each module.
+Dashboards — M12. This file grows with each module.

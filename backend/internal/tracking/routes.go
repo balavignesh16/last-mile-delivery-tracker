@@ -23,7 +23,8 @@ import (
 // GET /orders/:id/tracking is ADMIN + CUSTOMER — DELIVERY_AGENT gets
 // 403, matching M07's blanket "agents have no order visibility yet"
 // stance (no assigned-agent relationship exists until M09).
-func Mount(repo Repository, jwtSecret string) func(chi.Router) {
+// onTransition (M11) is nil-safe — see TransitionHook's own doc comment.
+func Mount(repo Repository, jwtSecret string, onTransition TransitionHook) func(chi.Router) {
 	return func(v1 chi.Router) {
 		transitionRoles := func(r chi.Router) chi.Router {
 			return r.With(auth.RequireAuth(jwtSecret), auth.RequireRole(users.RoleAdmin, users.RoleDeliveryAgent))
@@ -32,7 +33,7 @@ func Mount(repo Repository, jwtSecret string) func(chi.Router) {
 			return r.With(auth.RequireAuth(jwtSecret), auth.RequireRole(users.RoleAdmin, users.RoleCustomer))
 		}
 
-		transitionRoles(v1).Post("/orders/{id}/status", TransitionHandler(repo))
+		transitionRoles(v1).Post("/orders/{id}/status", TransitionHandler(repo, onTransition))
 		trackingReadRoles(v1).Get("/orders/{id}/tracking", GetTrackingHandler(repo))
 	}
 }

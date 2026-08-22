@@ -54,13 +54,13 @@ func setupAssignmentTest(t *testing.T) (router http.Handler, usersRepo users.Rep
 	oRepo := orders.NewPostgresRepository(p)
 	tRepo := tracking.NewPostgresRepository(p)
 	aRepo := agents.NewPostgresRepository(p)
-	asRepo := assignment.NewPostgresRepository(p, aRepo, oRepo, tRepo)
+	asRepo := assignment.NewPostgresRepository(p, aRepo, oRepo, tRepo, nil)
 	r := server.NewRouter(p, testLogger(),
 		auth.Mount(uRepo, agentsIntegrationJWTSecret),
 		zones.Mount(zRepo, agentsIntegrationJWTSecret),
 		rates.Mount(rRepo, zRepo, agentsIntegrationJWTSecret),
-		orders.Mount(oRepo, uRepo, zRepo, rRepo, aRepo, agentsIntegrationJWTSecret),
-		tracking.Mount(tRepo, agentsIntegrationJWTSecret),
+		orders.Mount(oRepo, uRepo, zRepo, rRepo, aRepo, agentsIntegrationJWTSecret, nil),
+		tracking.Mount(tRepo, agentsIntegrationJWTSecret, nil),
 		agents.Mount(aRepo, agentsIntegrationJWTSecret),
 		assignment.Mount(asRepo, agentsIntegrationJWTSecret),
 	)

@@ -10,6 +10,38 @@ with a React + TypeScript frontend, structured as a modular monolith.
 
 ## Current Status
 
+**M11 — Notification Service.** The customer is now notified — by
+email always, and by SMS when a phone number is on file — for all
+eight order-lifecycle events (`ORDER_CREATED`, `AGENT_ASSIGNED`,
+`PICKED_UP`, `IN_TRANSIT`, `OUT_FOR_DELIVERY`, `DELIVERED`, `FAILED`,
+`RESCHEDULED`). This is entirely a post-commit side effect of the
+endpoints M07–M10 already expose — no new endpoint, and no line of
+M08's transition logic, M09's ranking, or M10's reschedule
+authorization was changed. `internal/notifications` depends on
+`orders`/`users`/`tracking` to resolve a customer's contact details,
+but nothing in those packages depends back on it: `tracking` and
+`orders` each export a tiny, nil-safe callback type of their own
+(`tracking.TransitionHook`, `orders.OrderCreatedHook`), and
+`cmd/server/main.go` is the only place that wires the real
+`notifications.Service` into them. Idempotency is anchored on the
+*exact* `order_tracking_events.id` — never `(order_id, event,
+channel)` — because an order can legitimately produce the same event
+type more than once (a second `FAILED` after a
+`FAILED→RESCHEDULED→ASSIGNED→...` cycle is a distinct, independently
+notify-able occurrence); a `Repository.Claim`
+(`INSERT ... ON CONFLICT (tracking_event_id, channel) DO NOTHING`)
+executed *before* any provider call, backed by a real unique index, is
+what actually prevents a duplicate send under concurrent load, proven
+with real goroutines against real Postgres. `EmailProvider`/
+`SmsProvider` are two narrow interfaces; the only implementations that
+ship are log-based (`LogEmailProvider`/`LogSmsProvider`) — no external
+account, credential, or SDK dependency of any kind, by design for this
+MVP. A provider failure is caught, logged, and recorded as that one
+notification's own `FAILED` status; it can never roll back or fail the
+order/tracking/assignment/reschedule operation that triggered it.
+**M11 adds no REST API and no frontend UI** — both are explicit,
+approved scope decisions, not omissions; see `docs/notifications.md`.
+
 **M10 — Failed Delivery & Rescheduling.** A `FAILED` order can now be
 rescheduled: `POST /api/v1/orders/:id/reschedule` (`CUSTOMER`, own order
 only, or `ADMIN`, any order — body `{"requested_date": "YYYY-MM-DD",
@@ -39,8 +71,6 @@ transitions in an order's own tracking history rather than stored as a
 mutable counter. The frontend adds a "Reschedule delivery" control
 (native `<input type="date">`, no new dependency) and a reschedule-history
 section to the order detail page, visible to `CUSTOMER`/`ADMIN` only.
-**Notifications are explicitly out of scope here** — M11 sends them;
-M10 only makes the events they'd react to exist and be queryable.
 
 | Module | Status |
 |---|---|
@@ -54,7 +84,7 @@ M10 only makes the events they'd react to exist and be queryable.
 | M08 — Tracking & Order Lifecycle | ✅ Done |
 | M09 — Assignment Engine | ✅ Done |
 | M10 — Failed Delivery & Rescheduling | ✅ Done |
-| M11 — Notification Service | Not started |
+| M11 — Notification Service | ✅ Done |
 | M12 — Dashboards & Evaluation Layer | Not started |
 
 ## Tech Stack
@@ -603,6 +633,59 @@ is in [`docs/api.md`](docs/api.md). Short version:
   automatic reassignment, notifications, dashboards, and any change to
   M08's or M09's own code.
 
+## Notification Service (M11)
+
+Full design detail (the post-commit hook pattern and why it avoids an
+import cycle, the provider abstraction and its log-based MVP
+implementation, failure containment, and why idempotency is anchored
+on the exact `tracking_event_id`) is in
+[`docs/notifications.md`](docs/notifications.md); `docs/api.md`
+explicitly states M11 adds no REST API. Short version:
+
+- **What it does**: for all eight order-lifecycle events
+  (`ORDER_CREATED`, `AGENT_ASSIGNED`, `PICKED_UP`, `IN_TRANSIT`,
+  `OUT_FOR_DELIVERY`, `DELIVERED`, `FAILED`, `RESCHEDULED`), the
+  order's own customer is emailed (always) and texted (only when a
+  phone number is on file) — the only recipient this module ever
+  resolves.
+- **How it integrates without an import cycle**: `internal/notifications`
+  depends on `orders`/`users`/`tracking`, but nothing in those packages
+  depends back on it. `tracking.TransitionHook` and
+  `orders.OrderCreatedHook` are small, nil-safe callback types the
+  *producer* packages own; `tracking.TransitionHandler`,
+  `assignment.Assign`/`AutoAssign`, `rescheduling.Reschedule`, and
+  `orders.CreateOrderHandler` all invoke one after their own
+  transaction has already committed. Only `cmd/server/main.go`
+  constructs a real `notifications.Service` and wires its methods in —
+  no other package knows this module exists.
+- **Idempotency, the critical design constraint**: a notification is
+  identified by the exact `order_tracking_events.id` (a specific
+  occurrence) plus channel — never `(order_id, event, channel)` —
+  because the same event type can legitimately recur (a second
+  `FAILED` after a full `FAILED→RESCHEDULED→ASSIGNED→...` cycle is a
+  new, independently notify-able occurrence). `Repository.Claim`
+  (`INSERT ... ON CONFLICT (tracking_event_id, channel) DO NOTHING`)
+  runs *before* any provider call; a real Postgres unique index is the
+  actual backstop against a duplicate send, proven with concurrent
+  goroutines against real Postgres.
+- **Provider abstraction**: `EmailProvider`/`SmsProvider`, two narrow
+  interfaces. The only implementations that ship are log-based
+  (`LogEmailProvider`/`LogSmsProvider`) — zero external accounts,
+  credentials, or SDK dependencies, by design for this MVP.
+- **Failure containment**: a provider error is caught, logged, and
+  recorded as that one notification's `FAILED` status; a panicking
+  provider is recovered. Neither can ever roll back or fail the
+  order/tracking/assignment/reschedule operation that triggered it —
+  proven directly by forcing a real provider failure mid-lifecycle and
+  asserting the HTTP call still commits.
+- **No retries**: a `FAILED` notification attempt is never
+  automatically retried.
+- **Out of scope, by design**: no REST API of any kind, no frontend
+  notification UI (no bell icon, no history page, no preferences), no
+  queues/Kafka/RabbitMQ/Redis/background workers/polling/webhooks, no
+  recipients other than the order's own customer, and no change to
+  M08's, M09's, or M10's own logic.
+
 ## Repository Structure
 
 ```text
@@ -630,12 +713,13 @@ last-mile-delivery-tracker/
 │   │   ├── tracking/              # status state machine, order_tracking_events domain, repository, handlers, routes (M08)
 │   │   ├── assignment/            # candidate ranking, eligibility, repository (reuses tracking.TransitionTx), handlers, routes (M09)
 │   │   ├── rescheduling/          # reschedule domain/validation, repository (reuses tracking.TransitionTx, frees the previous agent), handlers, routes (M10)
-│   │   └── notifications/         # M11 — reserved, empty
+│   │   └── notifications/         # event->content mapping, provider abstraction + log-based MVP providers, claim-then-resolve repository, Service (M11)
 │   ├── migrations/                # embedded SQL migrations (go:embed): 0001 users (M02), 0002 delivery_agents (M03),
 │   │                               #   0003 zones, 0004 areas, 0005 delivery_agents.current_zone_id FK (M04),
 │   │                               #   0006 rate_cards, 0007 rate_card_slabs (M05); M06 added none — pure calculation, no new schema;
 │   │                               #   0008 orders (M07); 0009 order_tracking_events (M08, no ALTER to orders);
-│   │                               #   0010 orders.assigned_agent_id + indexes (M09); 0011 reschedule_requests (M10)
+│   │                               #   0010 orders.assigned_agent_id + indexes (M09); 0011 reschedule_requests (M10);
+│   │                               #   0012 notifications (M11)
 │   └── tests/
 │       ├── unit/                  # convention note — unit tests are co-located with source
 │       ├── integration/           # DB-backed integration tests (build tag: integration)
@@ -668,7 +752,8 @@ last-mile-delivery-tracker/
 │   ├── order-management.md        # orders schema, ownership, pricing snapshot, CalculateQuote reuse (M07)
 │   ├── order-tracking.md          # state machine, per-edge authorization, concurrency proof, initial event (M08)
 │   ├── assignment-engine.md       # eligibility rule, ranking algorithm, M08 reuse, concurrency proof, assigned_agent_id schema (M09)
-│   └── failed-delivery.md         # reschedule endpoints, the CUSTOMER-vs-M08-matrix resolution, reschedule_requests schema, agent-freeing, M09 reuse (M10)
+│   ├── failed-delivery.md         # reschedule endpoints, the CUSTOMER-vs-M08-matrix resolution, reschedule_requests schema, agent-freeing, M09 reuse (M10)
+│   └── notifications.md           # 8 lifecycle events, post-commit hook pattern, provider abstraction, tracking_event_id idempotency, no API/UI (M11)
 │
 └── scripts/
     └── seed/                      # reserved for later modules' larger seed data (M02's demo users seed from main.go instead — see its README)
@@ -761,3 +846,10 @@ Grows with each module.
 | Reschedule concurrency (same-order race, cross-module lock-ordering vs. M09) | `backend/internal/rescheduling/repository.go` | `TestRescheduleConcurrency_SameOrderRacedTwice`, `TestRescheduleConcurrency_DoesNotDeadlockWithAssignment` (repeated `-count=5`) | `docs/failed-delivery.md` |
 | Pure, deterministic date validation (past-date rejection, same-day allowed) | `backend/internal/rescheduling/reschedule.go` (`ValidateRescheduleDate`) | `TestValidateRescheduleDate_*`, `TestParseRequestedDate_*` | `docs/failed-delivery.md` |
 | Frontend reschedule control (native date input) + reschedule history | `frontend/src/pages/OrderDetailPage.tsx` | `OrderDetailPage.test.tsx`, `services/rescheduling.test.ts` | `docs/failed-delivery.md` |
+| `notifications` table: FKs, event/channel/status CHECKs, `(tracking_event_id, channel)` unique index | `backend/migrations/0012_create_notifications_table.sql` | `TestNotificationsTable_SchemaAndUniqueConstraint` (integration) | `docs/notifications.md` |
+| All 8 lifecycle events notify the customer (email always, SMS when phone on file) | `backend/internal/notifications/service.go` (`NotifyTransition`, `NotifyOrderCreated`) | `TestNotifyTransition_EveryLifecycleEventRecognized`, `TestNotificationFlow_FullLifecycleEveryEventNotifies` (integration) | `docs/notifications.md` |
+| Post-commit hooks avoid an M08/M09/M10/M11 import cycle, zero lines changed in those modules | `backend/internal/tracking/event.go` (`TransitionHook`), `backend/internal/orders/order.go` (`OrderCreatedHook`), `backend/cmd/server/main.go` | `TestTransitionHandler_TransitionHookFiresAfterSuccess`, `TestCreateOrderHandler_OrderCreatedHookFiresAfterSuccess` | `docs/notifications.md` |
+| Idempotency anchored on the exact `tracking_event_id`, not `(order_id, event, channel)` — a repeated FAILED after a reschedule cycle independently notifies | `backend/internal/notifications/repository.go` (`Claim`) | `TestNotifyTransition_RepeatedFailedOccurrencesEachNotify`, `TestNotificationFlow_SecondFailedOccurrenceCreatesNewRow` (integration) | `docs/notifications.md` |
+| Notification concurrency: claim-before-send + DB unique index prevents a duplicate send | `backend/internal/notifications/repository.go` (`Claim`) | `TestNotificationConcurrency_ConcurrentIdenticalAttemptsClaimExactlyOnce` (repeated `-count=5`) | `docs/notifications.md` |
+| Provider failure/panic never breaks the triggering lifecycle commit | `backend/internal/notifications/service.go` (`dispatch`, `safeSend`) | `TestNotifyTransition_ProviderPanicContained`, `TestNotificationFlow_ProviderFailureDoesNotBreakLifecycleCommit` (integration) | `docs/notifications.md` |
+| No REST API and no frontend UI, by design | — (no new routes, no new frontend files) | `TestNotifications_NoPublicEndpointsExist` | `docs/api.md`, `docs/notifications.md` |

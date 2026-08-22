@@ -21,6 +21,7 @@ import (
 	"lastmiletracker/internal/auth"
 	"lastmiletracker/internal/config"
 	"lastmiletracker/internal/database"
+	"lastmiletracker/internal/notifications"
 	"lastmiletracker/internal/orders"
 	"lastmiletracker/internal/rates"
 	"lastmiletracker/internal/rescheduling"
@@ -76,8 +77,20 @@ func main() {
 	ratesRepo := rates.NewPostgresRepository(pool)
 	ordersRepo := orders.NewPostgresRepository(pool)
 	trackingRepo := tracking.NewPostgresRepository(pool)
-	assignmentRepo := assignment.NewPostgresRepository(pool, agentsRepo, ordersRepo, trackingRepo)
-	reschedulingRepo := rescheduling.NewPostgresRepository(pool, trackingRepo)
+
+	// M11: log-based providers for MVP (no external credentials, no new
+	// dependency — see docs/notifications.md). notificationsService.
+	// NotifyTransition/NotifyOrderCreated are wired below as post-commit
+	// hooks into tracking/assignment/rescheduling/orders — none of those
+	// packages import internal/notifications themselves.
+	notificationsRepo := notifications.NewPostgresRepository(pool)
+	notificationsService := notifications.NewService(
+		notificationsRepo, ordersRepo, usersRepo, trackingRepo,
+		notifications.NewLogEmailProvider(), notifications.NewLogSmsProvider(),
+	)
+
+	assignmentRepo := assignment.NewPostgresRepository(pool, agentsRepo, ordersRepo, trackingRepo, notificationsService.NotifyTransition)
+	reschedulingRepo := rescheduling.NewPostgresRepository(pool, trackingRepo, notificationsService.NotifyTransition)
 
 	if err := auth.SeedDemoUsers(ctx, usersRepo, logger); err != nil {
 		logger.Error("demo user seeding failed", "error", err)
@@ -99,8 +112,8 @@ func main() {
 		agents.Mount(agentsRepo, cfg.JWTSecret),
 		zones.Mount(zonesRepo, cfg.JWTSecret),
 		rates.Mount(ratesRepo, zonesRepo, cfg.JWTSecret),
-		orders.Mount(ordersRepo, usersRepo, zonesRepo, ratesRepo, agentsRepo, cfg.JWTSecret),
-		tracking.Mount(trackingRepo, cfg.JWTSecret),
+		orders.Mount(ordersRepo, usersRepo, zonesRepo, ratesRepo, agentsRepo, cfg.JWTSecret, notificationsService.NotifyOrderCreated),
+		tracking.Mount(trackingRepo, cfg.JWTSecret, notificationsService.NotifyTransition),
 		assignment.Mount(assignmentRepo, cfg.JWTSecret),
 		rescheduling.Mount(reschedulingRepo, ordersRepo, cfg.JWTSecret),
 	)

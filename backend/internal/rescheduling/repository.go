@@ -75,10 +75,14 @@ type Repository interface {
 type PostgresRepository struct {
 	pool         *pgxpool.Pool
 	trackingRepo tracking.Repository
+	// onTransition (M11) is nil-safe — see tracking.TransitionHook's own
+	// doc comment. Wired in by main.go; this package has no dependency
+	// on internal/notifications at all.
+	onTransition tracking.TransitionHook
 }
 
-func NewPostgresRepository(pool *pgxpool.Pool, trackingRepo tracking.Repository) *PostgresRepository {
-	return &PostgresRepository{pool: pool, trackingRepo: trackingRepo}
+func NewPostgresRepository(pool *pgxpool.Pool, trackingRepo tracking.Repository, onTransition tracking.TransitionHook) *PostgresRepository {
+	return &PostgresRepository{pool: pool, trackingRepo: trackingRepo, onTransition: onTransition}
 }
 
 // rescheduleMetadata builds the tracking-event metadata every
@@ -118,7 +122,8 @@ func (r *PostgresRepository) Reschedule(ctx context.Context, input RescheduleInp
 	}
 
 	metadata := rescheduleMetadata(input.RequestedDate, input.Reason)
-	if _, err := r.trackingRepo.TransitionTx(ctx, tx, input.OrderID, input.ActorID, users.RoleAdmin, tracking.StatusRescheduled, metadata); err != nil {
+	event, err := r.trackingRepo.TransitionTx(ctx, tx, input.OrderID, input.ActorID, users.RoleAdmin, tracking.StatusRescheduled, metadata)
+	if err != nil {
 		return orders.Order{}, mapTrackingError(err)
 	}
 
@@ -134,6 +139,13 @@ func (r *PostgresRepository) Reschedule(ctx context.Context, input RescheduleInp
 	if err := tx.Commit(ctx); err != nil {
 		return orders.Order{}, fmt.Errorf("commit reschedule: %w", err)
 	}
+
+	// Fires strictly after the transaction above has already committed
+	// — see tracking.TransitionHook's doc comment.
+	if r.onTransition != nil {
+		r.onTransition(ctx, event)
+	}
+
 	return updated, nil
 }
 

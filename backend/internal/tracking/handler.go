@@ -59,7 +59,10 @@ func toEventResponse(e Event) eventResponse {
 // happens inside Repository.Transition, under the same lock that reads
 // the order's current status — see repository.go's doc comment for why
 // that has to be where it happens.
-func TransitionHandler(repo Repository) http.HandlerFunc {
+// onTransition is nil-safe (see TransitionHook's own doc comment) — M11's
+// notification service is wired in as this hook by main.go, but this
+// handler has no dependency on that package at all.
+func TransitionHandler(repo Repository, onTransition TransitionHook) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		identity, ok := auth.IdentityFromContext(r.Context())
 		if !ok {
@@ -101,6 +104,12 @@ func TransitionHandler(repo Repository) http.HandlerFunc {
 			slog.Error("status transition failed", "error", err)
 			server.WriteError(w, http.StatusInternalServerError, "could not update order status")
 			return
+		}
+
+		// Fires strictly after Transition's own transaction has already
+		// committed — see TransitionHook's doc comment.
+		if onTransition != nil {
+			onTransition(r.Context(), event)
 		}
 
 		server.WriteJSON(w, http.StatusCreated, toEventResponse(event))

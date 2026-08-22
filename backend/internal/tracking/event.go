@@ -10,6 +10,7 @@
 package tracking
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"time"
@@ -83,3 +84,17 @@ type Event struct {
 	Metadata       json.RawMessage
 	CreatedAt      time.Time
 }
+
+// TransitionHook is called with the Event a successful transition just
+// produced, strictly after that transition's own transaction has
+// already committed — a purely additive, post-commit extension point
+// for M11's notification service (or any future consumer) to observe a
+// transition without this package depending on it (avoiding an import
+// cycle, since M11 needs to depend on this package for Event/Repository,
+// not the other way around). Nil is always safe — every caller of a
+// hook-accepting function/constructor checks for nil before invoking it,
+// so nothing here is required to wire. TransitionHandler (this package)
+// and internal/assignment's and internal/rescheduling's own repositories
+// all accept and invoke this exact same type, since all three already
+// produce their own Event via Transition/TransitionTx.
+type TransitionHook func(ctx context.Context, event Event)

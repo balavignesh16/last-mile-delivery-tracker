@@ -57,8 +57,8 @@ func setupTrackingTest(t *testing.T) (router http.Handler, usersRepo users.Repos
 		auth.Mount(uRepo, agentsIntegrationJWTSecret),
 		zones.Mount(zRepo, agentsIntegrationJWTSecret),
 		rates.Mount(rRepo, zRepo, agentsIntegrationJWTSecret),
-		orders.Mount(oRepo, uRepo, zRepo, rRepo, aRepo, agentsIntegrationJWTSecret),
-		tracking.Mount(tRepo, agentsIntegrationJWTSecret),
+		orders.Mount(oRepo, uRepo, zRepo, rRepo, aRepo, agentsIntegrationJWTSecret, nil),
+		tracking.Mount(tRepo, agentsIntegrationJWTSecret, nil),
 	)
 	return r, uRepo, zRepo, p
 }
