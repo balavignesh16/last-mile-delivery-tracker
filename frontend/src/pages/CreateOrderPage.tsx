@@ -217,6 +217,34 @@ export function CreateOrderPage() {
         recalculates the price itself — the preview is never sent back as a trusted amount.
       </p>
 
+      {/* Purely a visual progress indicator, driven by the same `preview`
+          state the form/confirm logic already uses — no new business
+          logic, and neither step's label duplicates existing button/
+          heading text that tests already assert on. */}
+      <ol className="mt-5 flex items-center gap-3 text-sm" aria-hidden="true">
+        <li className="flex items-center gap-2">
+          <span
+            className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold ${
+              preview ? 'bg-navy-600 text-white' : 'bg-amber-500 text-white'
+            }`}
+          >
+            1
+          </span>
+          <span className={preview ? 'text-slate-500' : 'font-medium text-slate-900'}>Package details</span>
+        </li>
+        <li className="h-0.5 w-8 bg-navy-100" />
+        <li className="flex items-center gap-2">
+          <span
+            className={`flex h-6 w-6 items-center justify-center rounded-full text-xs font-semibold ${
+              preview ? 'bg-amber-500 text-white' : 'bg-navy-100 text-navy-400'
+            }`}
+          >
+            2
+          </span>
+          <span className={preview ? 'font-medium text-slate-900' : 'text-slate-400'}>Review &amp; confirm</span>
+        </li>
+      </ol>
+
       <form onSubmit={handlePreview} className="mt-6 space-y-6 rounded-lg border border-navy-100 bg-white p-6 shadow-sm">
         <ErrorBanner message={zonesError} />
         <ErrorBanner message={previewError} />

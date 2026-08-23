@@ -1,9 +1,10 @@
 import { Check, Copy, RotateCcw, Truck, UserCheck } from 'lucide-react'
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import { DeliveryFlowVisual } from '../components/DeliveryFlowVisual'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { Layout } from '../components/Layout'
-import { STATUS_ICON } from '../components/order-status'
+import { STATUS_ICON, STATUS_LABEL } from '../components/order-status'
 import { OrderStatusBadge } from '../components/OrderStatusBadge'
 import { Select } from '../components/Select'
 import { useAuth } from '../hooks/useAuth'
@@ -246,292 +247,326 @@ export function OrderDetailPage() {
     setTimeout(() => setCopied(false), 1500)
   }
 
+  const showAssign = order !== null && isAdmin && (ASSIGNABLE_STATUSES.includes(order.status) || assignmentSuccess !== null || assignmentError !== null)
+  const showReschedule = order !== null && (isAdmin || isCustomer) && (order.status === 'FAILED' || rescheduleSuccess !== null || rescheduleError !== null)
+  const showUpdateStatus = order !== null && (isAdmin || isDeliveryAgent) && !!user
+  const hasActionRail = showAssign || showReschedule || showUpdateStatus
+
   return (
     <Layout>
       <Link to="/orders" className="text-sm text-slate-500 hover:text-slate-800">
         ← Back to orders
       </Link>
 
-      <div className="mt-4 rounded-lg border border-navy-100 bg-white p-6 shadow-sm">
-        <ErrorBanner message={error} />
-        {loading ? (
-          <p className="text-sm text-slate-500">Loading…</p>
-        ) : !order ? null : (
-          <>
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <h1 className="text-xl font-semibold">Order {order.id}</h1>
-                <button
-                  type="button"
-                  onClick={handleCopyId}
-                  aria-label="Copy order ID"
-                  className="text-slate-400 transition-colors hover:text-navy-600"
-                >
-                  {copied ? <Check className="h-4 w-4 text-emerald-600" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
-                </button>
+      <ErrorBanner message={error} />
+      {loading ? (
+        <p className="mt-4 text-sm text-slate-500">Loading…</p>
+      ) : !order ? null : (
+        <>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex min-w-0 items-center gap-2">
+              <h1 className="truncate text-2xl font-semibold tracking-tight text-slate-900" title={order.id}>
+                Order {order.id.slice(0, 8)}
+              </h1>
+              <button
+                type="button"
+                onClick={handleCopyId}
+                aria-label="Copy order ID"
+                className="shrink-0 text-slate-400 transition-colors hover:text-navy-600"
+              >
+                {copied ? <Check className="h-4 w-4 text-emerald-600" aria-hidden="true" /> : <Copy className="h-4 w-4" aria-hidden="true" />}
+              </button>
+            </div>
+            <OrderStatusBadge status={order.status} />
+          </div>
+
+          {/* project44-style shipment overview: the same 4-stage flow
+              visual used on the marketing pages, but honestly bound to
+              this order's real status via DeliveryFlowVisual's `status`
+              prop — no stage highlighted at all for FAILED/RESCHEDULED,
+              since those aren't a further position on the happy path. */}
+          {canViewTracking && (
+            <div className="mt-4 flex justify-center rounded-lg border border-navy-100 bg-white px-4 py-6 shadow-sm sm:px-6">
+              <div className="sm:hidden">
+                <DeliveryFlowVisual compact variant="light" status={order.status} />
               </div>
-              <OrderStatusBadge status={order.status} />
+              <div className="hidden sm:block">
+                <DeliveryFlowVisual variant="light" status={order.status} />
+              </div>
+            </div>
+          )}
+
+          <div className={`mt-6 grid gap-6 ${hasActionRail ? 'lg:grid-cols-3' : ''}`}>
+            <div className={`space-y-6 ${hasActionRail ? 'lg:col-span-2' : ''}`}>
+              <div className="rounded-lg border border-navy-100 bg-white p-6 shadow-sm">
+                <h2 className="text-sm font-semibold text-slate-700">Order details</h2>
+                <dl className="mt-4 grid grid-cols-2 gap-x-6 gap-y-4 text-sm sm:grid-cols-3">
+                  <div>
+                    <dt className="text-slate-500">Order type</dt>
+                    <dd className="font-medium text-slate-900">{order.order_type}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">Payment type</dt>
+                    <dd className="font-medium text-slate-900">{order.payment_type}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">Zone relationship</dt>
+                    <dd className="font-medium text-slate-900">{order.zone_relationship}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">Dimensions</dt>
+                    <dd className="font-medium text-slate-900">
+                      {order.length_cm} × {order.breadth_cm} × {order.height_cm} cm
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">Actual weight</dt>
+                    <dd className="font-medium text-slate-900">{order.actual_weight_kg} kg</dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">Volumetric weight</dt>
+                    <dd className="font-medium text-slate-900">{order.volumetric_weight_kg} kg</dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">Chargeable weight</dt>
+                    <dd className="font-medium text-slate-900">{order.chargeable_weight_kg} kg</dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">Base rate</dt>
+                    <dd className="font-medium text-slate-900">{formatCurrency(order.base_rate)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">COD surcharge</dt>
+                    <dd className="font-medium text-slate-900">{formatCurrency(order.cod_surcharge)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">Final amount</dt>
+                    <dd className="text-base font-semibold text-slate-900">{formatCurrency(order.final_amount)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">Placed</dt>
+                    <dd className="font-medium text-slate-900">{new Date(order.created_at).toLocaleString()}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-500">Assigned agent</dt>
+                    <dd className="font-medium text-slate-900">
+                      {order.assigned_agent_id
+                        ? (agents.find((a) => a.id === order.assigned_agent_id)?.full_name ?? order.assigned_agent_id)
+                        : 'Unassigned'}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+
+              {canViewTracking && (
+                <div className="rounded-lg border border-navy-100 bg-white p-6 shadow-sm">
+                  <h2 className="text-sm font-semibold text-slate-700">Tracking timeline</h2>
+                  <ErrorBanner message={eventsError} />
+                  {eventsLoading ? (
+                    <p className="mt-3 text-sm text-slate-500">Loading…</p>
+                  ) : events.length === 0 ? (
+                    <p className="mt-3 text-sm text-slate-500">No tracking events yet.</p>
+                  ) : (
+                    <ol className="mt-4">
+                      {events.map((event, i) => {
+                        const Icon = STATUS_ICON[event.new_status]
+                        const isCurrent = i === events.length - 1
+                        return (
+                          <li key={event.id} className="flex gap-4 pb-6 text-sm last:pb-0">
+                            <div className="flex flex-col items-center">
+                              <span
+                                className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white ${
+                                  isCurrent ? 'bg-amber-500 ring-4 ring-amber-100' : 'bg-navy-600'
+                                }`}
+                              >
+                                <Icon className="h-4 w-4" aria-hidden="true" />
+                              </span>
+                              {i < events.length - 1 && <span className="mt-1 w-0.5 flex-1 bg-navy-100" aria-hidden="true" />}
+                            </div>
+                            <div className="flex flex-1 items-start justify-between pt-1">
+                              <div>
+                                <p className="font-medium text-slate-900">
+                                  {event.previous_status
+                                    ? `${STATUS_LABEL[event.previous_status]} → ${STATUS_LABEL[event.new_status]}`
+                                    : STATUS_LABEL[event.new_status]}
+                                </p>
+                                <p className="text-xs text-slate-500">Actor: {event.actor_id}</p>
+                              </div>
+                              <span className="whitespace-nowrap text-xs text-slate-400">{new Date(event.created_at).toLocaleString()}</span>
+                            </div>
+                          </li>
+                        )
+                      })}
+                    </ol>
+                  )}
+                </div>
+              )}
+
+              {canViewTracking && (
+                <div className="rounded-lg border border-navy-100 bg-white p-6 shadow-sm">
+                  <h2 className="text-sm font-semibold text-slate-700">Reschedule history</h2>
+                  <ErrorBanner message={reschedulesError} />
+                  {reschedulesLoading ? (
+                    <p className="mt-3 text-sm text-slate-500">Loading…</p>
+                  ) : reschedules.length === 0 ? (
+                    <p className="mt-3 text-sm text-slate-500">No reschedule requests yet.</p>
+                  ) : (
+                    <ol className="mt-4 space-y-3">
+                      {reschedules.map((re) => (
+                        <li key={re.id} className="flex items-start justify-between border-l-2 border-navy-100 pl-3 text-sm">
+                          <div>
+                            <p className="font-medium text-slate-900">New date: {re.requested_date}</p>
+                            {re.reason && <p className="text-xs text-slate-500">Reason: {re.reason}</p>}
+                            <p className="text-xs text-slate-500">Requested by: {re.requested_by}</p>
+                          </div>
+                          <span className="whitespace-nowrap text-xs text-slate-400">{new Date(re.created_at).toLocaleString()}</span>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </div>
+              )}
             </div>
 
-            <dl className="mt-6 grid grid-cols-2 gap-x-6 gap-y-4 text-sm sm:grid-cols-3">
-              <div>
-                <dt className="text-slate-500">Order type</dt>
-                <dd className="font-medium text-slate-900">{order.order_type}</dd>
-              </div>
-              <div>
-                <dt className="text-slate-500">Payment type</dt>
-                <dd className="font-medium text-slate-900">{order.payment_type}</dd>
-              </div>
-              <div>
-                <dt className="text-slate-500">Zone relationship</dt>
-                <dd className="font-medium text-slate-900">{order.zone_relationship}</dd>
-              </div>
-              <div>
-                <dt className="text-slate-500">Dimensions</dt>
-                <dd className="font-medium text-slate-900">
-                  {order.length_cm} × {order.breadth_cm} × {order.height_cm} cm
-                </dd>
-              </div>
-              <div>
-                <dt className="text-slate-500">Actual weight</dt>
-                <dd className="font-medium text-slate-900">{order.actual_weight_kg} kg</dd>
-              </div>
-              <div>
-                <dt className="text-slate-500">Volumetric weight</dt>
-                <dd className="font-medium text-slate-900">{order.volumetric_weight_kg} kg</dd>
-              </div>
-              <div>
-                <dt className="text-slate-500">Chargeable weight</dt>
-                <dd className="font-medium text-slate-900">{order.chargeable_weight_kg} kg</dd>
-              </div>
-              <div>
-                <dt className="text-slate-500">Base rate</dt>
-                <dd className="font-medium text-slate-900">{formatCurrency(order.base_rate)}</dd>
-              </div>
-              <div>
-                <dt className="text-slate-500">COD surcharge</dt>
-                <dd className="font-medium text-slate-900">{formatCurrency(order.cod_surcharge)}</dd>
-              </div>
-              <div>
-                <dt className="text-slate-500">Final amount</dt>
-                <dd className="text-base font-semibold text-slate-900">{formatCurrency(order.final_amount)}</dd>
-              </div>
-              <div>
-                <dt className="text-slate-500">Placed</dt>
-                <dd className="font-medium text-slate-900">{new Date(order.created_at).toLocaleString()}</dd>
-              </div>
-              <div>
-                <dt className="text-slate-500">Assigned agent</dt>
-                <dd className="font-medium text-slate-900">
-                  {order.assigned_agent_id
-                    ? (agents.find((a) => a.id === order.assigned_agent_id)?.full_name ?? order.assigned_agent_id)
-                    : 'Unassigned'}
-                </dd>
-              </div>
-            </dl>
-
-            {isAdmin && (ASSIGNABLE_STATUSES.includes(order.status) || assignmentSuccess || assignmentError) && (
-              <div className="mt-6 border-t border-slate-100 pt-6">
-                <h2 className="text-sm font-semibold text-slate-700">Assign delivery agent</h2>
-                <ErrorBanner message={assignmentError} />
-                {assignmentSuccess && (
-                  <div role="status" className="mt-2 rounded-md border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm text-emerald-800">
-                    {assignmentSuccess}
-                  </div>
-                )}
-                {ASSIGNABLE_STATUSES.includes(order.status) && (
-                  <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <Select
-                      aria-label="Delivery agent"
-                      value={selectedAgentId}
-                      onChange={setSelectedAgentId}
-                      disabled={assigning}
-                      placeholder="Select an agent…"
-                      className="w-56"
-                      options={agents.map((a) => ({ value: a.id, label: `${a.full_name} (${a.availability})` }))}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => void handleManualAssign()}
-                      disabled={assigning || !selectedAgentId}
-                      className="flex items-center gap-1.5 rounded-md bg-navy-600 px-3 py-2 text-sm font-medium text-white hover:bg-navy-700 disabled:opacity-50"
-                    >
-                      <UserCheck className="h-4 w-4" aria-hidden="true" />
-                      {assigning ? 'Assigning…' : 'Assign'}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void handleAutoAssign()}
-                      disabled={assigning}
-                      className="flex items-center gap-1.5 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
-                    >
-                      <Truck className="h-4 w-4" aria-hidden="true" />
-                      {assigning ? 'Assigning…' : 'Auto-assign'}
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {(isAdmin || isCustomer) && (order.status === 'FAILED' || rescheduleSuccess || rescheduleError) && (
-              <div className="mt-6 border-t border-slate-100 pt-6">
-                <h2 className="text-sm font-semibold text-slate-700">Reschedule delivery</h2>
-                <ErrorBanner message={rescheduleError} />
-                {rescheduleSuccess && (
-                  <div role="status" className="mt-2 rounded-md border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm text-emerald-800">
-                    {rescheduleSuccess}
-                  </div>
-                )}
-                {order.status === 'FAILED' && (
-                  <form onSubmit={(e) => void handleReschedule(e)} className="mt-3 flex flex-wrap items-end gap-2">
-                    <div>
-                      <label htmlFor="requested-date" className="block text-xs font-medium text-slate-500">
-                        New delivery date
-                      </label>
-                      <input
-                        id="requested-date"
-                        type="date"
-                        required
-                        value={requestedDate}
-                        onChange={(e) => setRequestedDate(e.target.value)}
-                        disabled={rescheduling}
-                        className="mt-1 rounded-md border border-slate-300 px-3 py-2 text-sm"
-                      />
-                    </div>
-                    <div>
-                      <label htmlFor="reschedule-reason" className="block text-xs font-medium text-slate-500">
-                        Reason (optional)
-                      </label>
-                      <input
-                        id="reschedule-reason"
-                        type="text"
-                        value={reason}
-                        onChange={(e) => setReason(e.target.value)}
-                        disabled={rescheduling}
-                        className="mt-1 rounded-md border border-slate-300 px-3 py-2 text-sm"
-                      />
-                    </div>
-                    <button
-                      type="submit"
-                      disabled={rescheduling || !requestedDate}
-                      className="flex items-center gap-1.5 rounded-md bg-navy-600 px-3 py-2 text-sm font-medium text-white hover:bg-navy-700 disabled:opacity-50"
-                    >
-                      <RotateCcw className="h-4 w-4" aria-hidden="true" />
-                      {rescheduling ? 'Rescheduling…' : 'Reschedule'}
-                    </button>
-                  </form>
-                )}
-              </div>
-            )}
-
-            {(isAdmin || isDeliveryAgent) && user && (
-              <div className="mt-6 border-t border-slate-100 pt-6">
-                <h2 className="text-sm font-semibold text-slate-700">Update status</h2>
-                <ErrorBanner message={transitionError} />
-                {(() => {
-                  const available = transitionsForRole(order.status, user.role)
-                  if (available.length > 0) {
-                    return (
-                      <div className="mt-3 flex flex-wrap gap-2">
-                        {available.map((next) => (
-                          <button
-                            key={next}
-                            type="button"
-                            onClick={() => void handleTransition(next)}
-                            disabled={transitioning !== null}
-                            className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
-                          >
-                            {transitioning === next ? 'Updating…' : `Mark as ${next}`}
-                          </button>
-                        ))}
+            {hasActionRail && (
+              <div className="space-y-6 lg:sticky lg:top-6 lg:self-start">
+                {showAssign && (
+                  <div className="rounded-lg border border-navy-100 bg-navy-50/40 p-6 shadow-sm">
+                    <h2 className="text-sm font-semibold text-slate-700">Assign delivery agent</h2>
+                    <ErrorBanner message={assignmentError} />
+                    {assignmentSuccess && (
+                      <div role="status" className="mt-2 rounded-md border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm text-emerald-800">
+                        {assignmentSuccess}
                       </div>
-                    )
-                  }
-                  // Two distinct empty states: a genuinely terminal
-                  // status (no role has any further edge, e.g.
-                  // DELIVERED) vs. a status with legal next edges that
-                  // simply aren't authorized for this viewer's role
-                  // (e.g. a DELIVERY_AGENT viewing a FAILED order, where
-                  // only ADMIN may move it to RESCHEDULED).
-                  return (
-                    <p className="mt-2 text-sm text-slate-500">
-                      {LEGAL_TRANSITIONS[order.status].length === 0
-                        ? 'This order is in a terminal state — no further transitions are possible.'
-                        : 'No status update is available to you for this order right now.'}
-                    </p>
-                  )
-                })()}
+                    )}
+                    {ASSIGNABLE_STATUSES.includes(order.status) && (
+                      <div className="mt-3 flex flex-col items-stretch gap-2">
+                        <Select
+                          aria-label="Delivery agent"
+                          value={selectedAgentId}
+                          onChange={setSelectedAgentId}
+                          disabled={assigning}
+                          placeholder="Select an agent…"
+                          options={agents.map((a) => ({ value: a.id, label: `${a.full_name} (${a.availability})` }))}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void handleManualAssign()}
+                          disabled={assigning || !selectedAgentId}
+                          className="flex items-center justify-center gap-1.5 rounded-md bg-navy-600 px-3 py-2 text-sm font-medium text-white hover:bg-navy-700 disabled:opacity-50"
+                        >
+                          <UserCheck className="h-4 w-4" aria-hidden="true" />
+                          {assigning ? 'Assigning…' : 'Assign'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void handleAutoAssign()}
+                          disabled={assigning}
+                          className="flex items-center justify-center gap-1.5 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                        >
+                          <Truck className="h-4 w-4" aria-hidden="true" />
+                          {assigning ? 'Assigning…' : 'Auto-assign'}
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {showReschedule && (
+                  <div className="rounded-lg border border-navy-100 bg-navy-50/40 p-6 shadow-sm">
+                    <h2 className="text-sm font-semibold text-slate-700">Reschedule delivery</h2>
+                    <ErrorBanner message={rescheduleError} />
+                    {rescheduleSuccess && (
+                      <div role="status" className="mt-2 rounded-md border border-emerald-300 bg-emerald-50 px-4 py-2 text-sm text-emerald-800">
+                        {rescheduleSuccess}
+                      </div>
+                    )}
+                    {order.status === 'FAILED' && (
+                      <form onSubmit={(e) => void handleReschedule(e)} className="mt-3 flex flex-col items-stretch gap-3">
+                        <div>
+                          <label htmlFor="requested-date" className="block text-xs font-medium text-slate-500">
+                            New delivery date
+                          </label>
+                          <input
+                            id="requested-date"
+                            type="date"
+                            required
+                            value={requestedDate}
+                            onChange={(e) => setRequestedDate(e.target.value)}
+                            disabled={rescheduling}
+                            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                          />
+                        </div>
+                        <div>
+                          <label htmlFor="reschedule-reason" className="block text-xs font-medium text-slate-500">
+                            Reason (optional)
+                          </label>
+                          <input
+                            id="reschedule-reason"
+                            type="text"
+                            value={reason}
+                            onChange={(e) => setReason(e.target.value)}
+                            disabled={rescheduling}
+                            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                          />
+                        </div>
+                        <button
+                          type="submit"
+                          disabled={rescheduling || !requestedDate}
+                          className="flex items-center justify-center gap-1.5 rounded-md bg-navy-600 px-3 py-2 text-sm font-medium text-white hover:bg-navy-700 disabled:opacity-50"
+                        >
+                          <RotateCcw className="h-4 w-4" aria-hidden="true" />
+                          {rescheduling ? 'Rescheduling…' : 'Reschedule'}
+                        </button>
+                      </form>
+                    )}
+                  </div>
+                )}
+
+                {showUpdateStatus && user && (
+                  <div className="rounded-lg border border-navy-100 bg-navy-50/40 p-6 shadow-sm">
+                    <h2 className="text-sm font-semibold text-slate-700">Update status</h2>
+                    <ErrorBanner message={transitionError} />
+                    {(() => {
+                      const available = transitionsForRole(order.status, user.role)
+                      if (available.length > 0) {
+                        return (
+                          <div className="mt-3 flex flex-col items-stretch gap-2">
+                            {available.map((next) => (
+                              <button
+                                key={next}
+                                type="button"
+                                onClick={() => void handleTransition(next)}
+                                disabled={transitioning !== null}
+                                className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                              >
+                                {transitioning === next ? 'Updating…' : `Mark as ${next}`}
+                              </button>
+                            ))}
+                          </div>
+                        )
+                      }
+                      // Two distinct empty states: a genuinely terminal
+                      // status (no role has any further edge, e.g.
+                      // DELIVERED) vs. a status with legal next edges
+                      // that simply aren't authorized for this viewer's
+                      // role (e.g. a DELIVERY_AGENT viewing a FAILED
+                      // order, where only ADMIN may move it to
+                      // RESCHEDULED).
+                      return (
+                        <p className="mt-2 text-sm text-slate-500">
+                          {LEGAL_TRANSITIONS[order.status].length === 0
+                            ? 'This order is in a terminal state — no further transitions are possible.'
+                            : 'No status update is available to you for this order right now.'}
+                        </p>
+                      )
+                    })()}
+                  </div>
+                )}
               </div>
             )}
-          </>
-        )}
-      </div>
-
-      {canViewTracking && (
-      <div className="mt-6 rounded-lg border border-navy-100 bg-white p-6 shadow-sm">
-        <h2 className="text-sm font-semibold text-slate-700">Tracking timeline</h2>
-        <ErrorBanner message={eventsError} />
-        {eventsLoading ? (
-          <p className="mt-3 text-sm text-slate-500">Loading…</p>
-        ) : events.length === 0 ? (
-          <p className="mt-3 text-sm text-slate-500">No tracking events yet.</p>
-        ) : (
-          <ol className="mt-4">
-            {events.map((event, i) => {
-              const Icon = STATUS_ICON[event.new_status]
-              const isCurrent = i === events.length - 1
-              return (
-                <li key={event.id} className="flex gap-4 pb-6 text-sm last:pb-0">
-                  <div className="flex flex-col items-center">
-                    <span
-                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-white ${
-                        isCurrent ? 'bg-amber-500 ring-4 ring-amber-100' : 'bg-navy-600'
-                      }`}
-                    >
-                      <Icon className="h-4 w-4" aria-hidden="true" />
-                    </span>
-                    {i < events.length - 1 && <span className="mt-1 w-0.5 flex-1 bg-navy-100" aria-hidden="true" />}
-                  </div>
-                  <div className="flex flex-1 items-start justify-between pt-1">
-                    <div>
-                      <p className="font-medium text-slate-900">
-                        {event.previous_status ? `${event.previous_status} → ${event.new_status}` : event.new_status}
-                      </p>
-                      <p className="text-xs text-slate-500">Actor: {event.actor_id}</p>
-                    </div>
-                    <span className="whitespace-nowrap text-xs text-slate-400">{new Date(event.created_at).toLocaleString()}</span>
-                  </div>
-                </li>
-              )
-            })}
-          </ol>
-        )}
-      </div>
-      )}
-
-      {canViewTracking && (
-      <div className="mt-6 rounded-lg border border-navy-100 bg-white p-6 shadow-sm">
-        <h2 className="text-sm font-semibold text-slate-700">Reschedule history</h2>
-        <ErrorBanner message={reschedulesError} />
-        {reschedulesLoading ? (
-          <p className="mt-3 text-sm text-slate-500">Loading…</p>
-        ) : reschedules.length === 0 ? (
-          <p className="mt-3 text-sm text-slate-500">No reschedule requests yet.</p>
-        ) : (
-          <ol className="mt-4 space-y-3">
-            {reschedules.map((re) => (
-              <li key={re.id} className="flex items-start justify-between border-l-2 border-navy-100 pl-3 text-sm">
-                <div>
-                  <p className="font-medium text-slate-900">New date: {re.requested_date}</p>
-                  {re.reason && <p className="text-xs text-slate-500">Reason: {re.reason}</p>}
-                  <p className="text-xs text-slate-500">Requested by: {re.requested_by}</p>
-                </div>
-                <span className="whitespace-nowrap text-xs text-slate-400">{new Date(re.created_at).toLocaleString()}</span>
-              </li>
-            ))}
-          </ol>
-        )}
-      </div>
+          </div>
+        </>
       )}
     </Layout>
   )

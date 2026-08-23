@@ -131,7 +131,10 @@ describe('OrderDetailPage', () => {
 
     renderAt('/orders/order-1')
 
-    await waitFor(() => expect(screen.getByText('CREATED', { selector: 'p' })).toBeTruthy())
+    // Round 4: timeline text is humanized via STATUS_LABEL (matches the
+    // Round 3 admin-dashboard convention), so this reads "Created" not
+    // the raw enum value.
+    await waitFor(() => expect(screen.getByText('Created', { selector: 'p' })).toBeTruthy())
     expect(screen.getByText(/Actor: customer-1/)).toBeTruthy()
   })
 
