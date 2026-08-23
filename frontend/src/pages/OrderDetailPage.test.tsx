@@ -314,8 +314,10 @@ describe('OrderDetailPage', () => {
 
     renderAt('/orders/order-1')
 
+    await waitFor(() => expect(screen.getByLabelText('Delivery agent')).toBeTruthy())
+    fireEvent.click(screen.getByLabelText('Delivery agent'))
     await waitFor(() => expect(screen.getByRole('option', { name: 'Alice Agent (AVAILABLE)' })).toBeTruthy())
-    fireEvent.change(screen.getByLabelText('Delivery agent'), { target: { value: 'agent-1' } })
+    fireEvent.click(screen.getByRole('option', { name: 'Alice Agent (AVAILABLE)' }))
     fireEvent.click(screen.getByRole('button', { name: 'Assign' }))
 
     await waitFor(() => expect(screen.getByText('Order assigned.')).toBeTruthy())

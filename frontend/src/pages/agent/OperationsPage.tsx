@@ -2,6 +2,7 @@ import { MapPin, Navigation, Truck } from 'lucide-react'
 import { useEffect, useState, type FormEvent } from 'react'
 import { ErrorBanner } from '../../components/ErrorBanner'
 import { Layout } from '../../components/Layout'
+import { Select } from '../../components/Select'
 import { StatusBadge } from '../../components/StatusBadge'
 import { useAuth } from '../../hooks/useAuth'
 import { ApiError } from '../../services/api'
@@ -218,19 +219,14 @@ export function OperationsPage() {
             <label htmlFor="zone" className="block text-sm font-medium text-slate-700">
               Zone
             </label>
-            <select
+            <Select
               id="zone"
               value={selectedZoneId}
-              onChange={(e) => setSelectedZoneId(e.target.value)}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            >
-              <option value="">Choose a zone…</option>
-              {zones.map((z) => (
-                <option key={z.id} value={z.id}>
-                  {z.name}
-                </option>
-              ))}
-            </select>
+              onChange={setSelectedZoneId}
+              placeholder="Choose a zone…"
+              className="mt-1"
+              options={zones.map((z) => ({ value: z.id, label: z.name }))}
+            />
           </div>
           <button
             type="submit"

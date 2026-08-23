@@ -43,6 +43,22 @@ const order = {
   created_at: '2026-01-01T00:00:00Z',
 }
 
+// Opens a filter Select, waits for its options to have loaded, verifies
+// the given option is present, then closes without choosing it.
+async function openAndVerify(triggerLabel: string, optionName: string) {
+  const trigger = screen.getByLabelText(triggerLabel)
+  fireEvent.click(trigger)
+  await waitFor(() => expect(screen.getByRole('option', { name: optionName })).toBeTruthy())
+  fireEvent.keyDown(trigger, { key: 'Escape' })
+}
+
+// Opens a filter Select, waits for the given option to render, clicks it.
+async function chooseOption(triggerLabel: string, optionName: string) {
+  fireEvent.click(screen.getByLabelText(triggerLabel))
+  await waitFor(() => expect(screen.getByRole('option', { name: optionName })).toBeTruthy())
+  fireEvent.click(screen.getByRole('option', { name: optionName }))
+}
+
 describe('OrdersPage', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -163,10 +179,10 @@ describe('OrdersPage', () => {
     )
 
     await waitFor(() => expect(screen.getByLabelText('Status')).toBeTruthy())
-    await waitFor(() => expect(screen.getByRole('option', { name: 'Zone One' })).toBeTruthy())
-    await waitFor(() => expect(screen.getByRole('option', { name: 'Alice Agent' })).toBeTruthy())
+    await openAndVerify('Zone', 'Zone One')
+    await openAndVerify('Agent', 'Alice Agent')
 
-    fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'FAILED' } })
+    await chooseOption('Status', 'FAILED')
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url) === '/api/v1/orders?status=FAILED')).toBe(true))
   })
@@ -191,11 +207,10 @@ describe('OrdersPage', () => {
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getByRole('option', { name: 'Zone One' })).toBeTruthy())
-    await waitFor(() => expect(screen.getByRole('option', { name: 'Alice Agent' })).toBeTruthy())
-    fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'FAILED' } })
-    fireEvent.change(screen.getByLabelText('Zone'), { target: { value: 'zone-1' } })
-    fireEvent.change(screen.getByLabelText('Agent'), { target: { value: 'agent-1' } })
+    await waitFor(() => expect(screen.getByLabelText('Status')).toBeTruthy())
+    await chooseOption('Status', 'FAILED')
+    await chooseOption('Zone', 'Zone One')
+    await chooseOption('Agent', 'Alice Agent')
 
     await waitFor(() =>
       expect(fetchMock.mock.calls.some(([url]) => String(url) === '/api/v1/orders?status=FAILED&zone=zone-1&agent=agent-1')).toBe(true),
@@ -219,7 +234,7 @@ describe('OrdersPage', () => {
     )
 
     await waitFor(() => expect(screen.getByLabelText('Status')).toBeTruthy())
-    fireEvent.change(screen.getByLabelText('Status'), { target: { value: 'FAILED' } })
+    await chooseOption('Status', 'FAILED')
     await waitFor(() => expect(screen.getByRole('button', { name: 'Clear filters' })).toBeTruthy())
 
     fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }))

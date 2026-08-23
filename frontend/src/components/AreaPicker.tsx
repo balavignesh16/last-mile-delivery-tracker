@@ -1,3 +1,4 @@
+import { Select } from './Select'
 import type { Area, Zone } from '../types/zone'
 
 // A pickup/drop area picker: pick a zone, then an area within it. There
@@ -35,38 +36,28 @@ export function AreaPicker({
         <label htmlFor={`${idPrefix}_zone`} className="block text-xs font-medium text-slate-700">
           Zone
         </label>
-        <select
+        <Select
           id={`${idPrefix}_zone`}
           value={zoneId}
-          onChange={(e) => onZoneChange(e.target.value)}
-          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-        >
-          <option value="">Select a zone…</option>
-          {zones.map((z) => (
-            <option key={z.id} value={z.id} disabled={!z.active}>
-              {z.name} {z.active ? '' : '(inactive)'}
-            </option>
-          ))}
-        </select>
+          onChange={onZoneChange}
+          placeholder="Select a zone…"
+          className="mt-1"
+          options={zones.map((z) => ({ value: z.id, label: `${z.name}${z.active ? '' : ' (inactive)'}`, disabled: !z.active }))}
+        />
       </div>
       <div>
         <label htmlFor={`${idPrefix}_area`} className="block text-xs font-medium text-slate-700">
           Area
         </label>
-        <select
+        <Select
           id={`${idPrefix}_area`}
           value={areaId}
-          onChange={(e) => onAreaChange(e.target.value)}
+          onChange={onAreaChange}
           disabled={!zoneId || areasLoading}
-          className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-50"
-        >
-          <option value="">{areasLoading ? 'Loading…' : 'Select an area…'}</option>
-          {areas.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.name}
-            </option>
-          ))}
-        </select>
+          placeholder={areasLoading ? 'Loading…' : 'Select an area…'}
+          className="mt-1"
+          options={areas.map((a) => ({ value: a.id, label: a.name }))}
+        />
       </div>
     </fieldset>
   )

@@ -5,6 +5,7 @@ import { ErrorBanner } from '../components/ErrorBanner'
 import { Layout } from '../components/Layout'
 import { STATUS_ICON } from '../components/order-status'
 import { OrderStatusBadge } from '../components/OrderStatusBadge'
+import { Select } from '../components/Select'
 import { useAuth } from '../hooks/useAuth'
 import { assignOrder, autoAssignOrder } from '../services/assignment'
 import { ApiError } from '../services/api'
@@ -340,20 +341,15 @@ export function OrderDetailPage() {
                 )}
                 {ASSIGNABLE_STATUSES.includes(order.status) && (
                   <div className="mt-3 flex flex-wrap items-center gap-2">
-                    <select
+                    <Select
                       aria-label="Delivery agent"
                       value={selectedAgentId}
-                      onChange={(e) => setSelectedAgentId(e.target.value)}
+                      onChange={setSelectedAgentId}
                       disabled={assigning}
-                      className="rounded-md border border-slate-300 px-3 py-2 text-sm"
-                    >
-                      <option value="">Select an agent…</option>
-                      {agents.map((a) => (
-                        <option key={a.id} value={a.id}>
-                          {a.full_name} ({a.availability})
-                        </option>
-                      ))}
-                    </select>
+                      placeholder="Select an agent…"
+                      className="w-56"
+                      options={agents.map((a) => ({ value: a.id, label: `${a.full_name} (${a.availability})` }))}
+                    />
                     <button
                       type="button"
                       onClick={() => void handleManualAssign()}

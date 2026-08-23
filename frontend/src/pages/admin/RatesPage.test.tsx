@@ -116,8 +116,10 @@ describe('RatesPage', () => {
 
     await waitFor(() => expect(screen.getByText('No rate cards yet.')).toBeTruthy())
 
-    fireEvent.change(screen.getByLabelText('Order type'), { target: { value: 'B2C' } })
-    fireEvent.change(screen.getByLabelText('Zone relationship'), { target: { value: 'INTER' } })
+    fireEvent.click(screen.getByLabelText('Order type'))
+    fireEvent.click(screen.getByRole('option', { name: 'B2C' }))
+    fireEvent.click(screen.getByLabelText('Zone relationship'))
+    fireEvent.click(screen.getByRole('option', { name: 'INTER' }))
     fireEvent.click(screen.getByRole('button', { name: /create rate card/i }))
 
     await waitFor(() => expect(screen.getByText(/B2C · INTER/)).toBeTruthy())

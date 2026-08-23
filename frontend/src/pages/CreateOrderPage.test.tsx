@@ -74,14 +74,32 @@ function fetchRouter() {
   })
 }
 
+// Opens a Select trigger, waits for the given option to render (the
+// trigger itself may start out disabled — e.g. the area picker until a
+// zone is chosen — and its options load asynchronously once enabled),
+// then clicks it.
+async function chooseOption(triggerLabel: string, triggerSelector: string, optionName: string) {
+  const getTrigger = () => screen.getByLabelText(triggerLabel, { selector: triggerSelector }) as HTMLButtonElement
+  await waitFor(() => expect(getTrigger().disabled).toBe(false))
+  fireEvent.click(getTrigger())
+  await waitFor(() => expect(screen.getByRole('option', { name: optionName })).toBeTruthy())
+  fireEvent.click(screen.getByRole('option', { name: optionName }))
+}
+
+// Opens and closes a Select without choosing anything — used purely to
+// wait for its async options (zones) to finish loading.
+async function waitForZonesLoaded() {
+  const trigger = screen.getByLabelText('Zone', { selector: '#order_pickup_zone' })
+  fireEvent.click(trigger)
+  await waitFor(() => expect(screen.getByRole('option', { name: 'Zone A' })).toBeTruthy())
+  fireEvent.keyDown(trigger, { key: 'Escape' })
+}
+
 async function fillAreas() {
-  await waitFor(() => expect(screen.getAllByText('Zone A').length).toBeGreaterThan(0))
-  fireEvent.change(screen.getByLabelText('Zone', { selector: '#order_pickup_zone' }), { target: { value: 'zone-a' } })
-  await waitFor(() => expect(screen.getByText('Area A1')).toBeTruthy())
-  fireEvent.change(screen.getByLabelText('Area', { selector: '#order_pickup_area' }), { target: { value: 'area-a1' } })
-  fireEvent.change(screen.getByLabelText('Zone', { selector: '#order_drop_zone' }), { target: { value: 'zone-a' } })
-  await waitFor(() => expect((screen.getByLabelText('Area', { selector: '#order_drop_area' }) as HTMLSelectElement).options.length).toBeGreaterThan(1))
-  fireEvent.change(screen.getByLabelText('Area', { selector: '#order_drop_area' }), { target: { value: 'area-a1' } })
+  await chooseOption('Zone', '#order_pickup_zone', 'Zone A')
+  await chooseOption('Area', '#order_pickup_area', 'Area A1')
+  await chooseOption('Zone', '#order_drop_zone', 'Zone A')
+  await chooseOption('Area', '#order_drop_area', 'Area A1')
   fireEvent.change(screen.getByLabelText('Length (cm)'), { target: { value: '10' } })
   fireEvent.change(screen.getByLabelText('Breadth (cm)'), { target: { value: '10' } })
   fireEvent.change(screen.getByLabelText('Height (cm)'), { target: { value: '10' } })
@@ -104,7 +122,7 @@ describe('CreateOrderPage', () => {
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getAllByText('Zone A').length).toBeGreaterThan(0))
+    await waitForZonesLoaded()
     expect(screen.queryByLabelText('Customer ID')).toBeNull()
   })
 
@@ -118,7 +136,7 @@ describe('CreateOrderPage', () => {
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getAllByText('Zone A').length).toBeGreaterThan(0))
+    await waitForZonesLoaded()
     expect(screen.getByLabelText('Customer ID')).toBeTruthy()
   })
 
@@ -158,7 +176,7 @@ describe('CreateOrderPage', () => {
         <CreateOrderPage />
       </MemoryRouter>,
     )
-    await waitFor(() => expect(screen.getAllByText('Zone A').length).toBeGreaterThan(0))
+    await waitForZonesLoaded()
     fireEvent.change(screen.getByLabelText('Customer ID'), { target: { value: 'customer-99' } })
     await fillAreas()
 
@@ -183,7 +201,7 @@ describe('CreateOrderPage', () => {
         <CreateOrderPage />
       </MemoryRouter>,
     )
-    await waitFor(() => expect(screen.getAllByText('Zone A').length).toBeGreaterThan(0))
+    await waitForZonesLoaded()
 
     fireEvent.click(screen.getByRole('button', { name: 'Preview quote' }))
 

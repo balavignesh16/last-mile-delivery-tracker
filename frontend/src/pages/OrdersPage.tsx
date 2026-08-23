@@ -4,6 +4,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { Layout } from '../components/Layout'
 import { OrderStatusBadge } from '../components/OrderStatusBadge'
+import { Select } from '../components/Select'
 import { useAuth } from '../hooks/useAuth'
 import { listAgents } from '../services/agents'
 import { ApiError } from '../services/api'
@@ -105,55 +106,40 @@ export function OrdersPage() {
             <label htmlFor="status-filter" className="block text-xs font-medium text-slate-500">
               Status
             </label>
-            <select
+            <Select
               id="status-filter"
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="mt-1 rounded-md border border-slate-300 px-3 py-2 text-sm"
-            >
-              <option value="">All statuses</option>
-              {ORDER_STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
+              onChange={setStatusFilter}
+              placeholder="All statuses"
+              className="mt-1 w-40"
+              options={ORDER_STATUSES.map((s) => ({ value: s, label: s }))}
+            />
           </div>
           <div>
             <label htmlFor="zone-filter" className="block text-xs font-medium text-slate-500">
               Zone
             </label>
-            <select
+            <Select
               id="zone-filter"
               value={zoneFilter}
-              onChange={(e) => setZoneFilter(e.target.value)}
-              className="mt-1 rounded-md border border-slate-300 px-3 py-2 text-sm"
-            >
-              <option value="">All zones</option>
-              {zones.map((z) => (
-                <option key={z.id} value={z.id}>
-                  {z.name}
-                </option>
-              ))}
-            </select>
+              onChange={setZoneFilter}
+              placeholder="All zones"
+              className="mt-1 w-40"
+              options={zones.map((z) => ({ value: z.id, label: z.name }))}
+            />
           </div>
           <div>
             <label htmlFor="agent-filter" className="block text-xs font-medium text-slate-500">
               Agent
             </label>
-            <select
+            <Select
               id="agent-filter"
               value={agentFilter}
-              onChange={(e) => setAgentFilter(e.target.value)}
-              className="mt-1 rounded-md border border-slate-300 px-3 py-2 text-sm"
-            >
-              <option value="">All agents</option>
-              {agents.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.full_name}
-                </option>
-              ))}
-            </select>
+              onChange={setAgentFilter}
+              placeholder="All agents"
+              className="mt-1 w-40"
+              options={agents.map((a) => ({ value: a.id, label: a.full_name }))}
+            />
           </div>
           {hasActiveFilter && (
             <button

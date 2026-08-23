@@ -55,6 +55,14 @@ function mockAgentAuth() {
   } as AuthContextValue)
 }
 
+// Opens the Zone Select trigger, waits for the given option to render
+// (zones load asynchronously), then clicks it.
+async function chooseZone(optionName: string) {
+  fireEvent.click(screen.getByLabelText('Zone'))
+  await waitFor(() => expect(screen.getByRole('option', { name: optionName })).toBeTruthy())
+  fireEvent.click(screen.getByRole('option', { name: optionName }))
+}
+
 describe('OperationsPage', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -171,7 +179,7 @@ describe('OperationsPage', () => {
     )
 
     await waitFor(() => expect(screen.getByLabelText('Zone')).toBeTruthy())
-    fireEvent.change(screen.getByLabelText('Zone'), { target: { value: 'zone-1' } })
+    await chooseZone('North')
     fireEvent.click(screen.getByRole('button', { name: /update zone/i }))
 
     await waitFor(() => expect(screen.getByText('Zone updated.')).toBeTruthy())
@@ -220,7 +228,7 @@ describe('OperationsPage', () => {
     )
 
     await waitFor(() => expect(screen.getByLabelText('Zone')).toBeTruthy())
-    fireEvent.change(screen.getByLabelText('Zone'), { target: { value: 'zone-1' } })
+    await chooseZone('North')
     fireEvent.click(screen.getByRole('button', { name: /update zone/i }))
 
     await waitFor(() => expect(screen.getByText('zone is not active')).toBeTruthy())

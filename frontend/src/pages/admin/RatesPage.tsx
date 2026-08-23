@@ -2,6 +2,7 @@ import { Wallet } from 'lucide-react'
 import { useEffect, useState, type FormEvent } from 'react'
 import { ErrorBanner } from '../../components/ErrorBanner'
 import { Layout } from '../../components/Layout'
+import { Select } from '../../components/Select'
 import { StatusBadge } from '../../components/StatusBadge'
 import { useAuth } from '../../hooks/useAuth'
 import { ApiError } from '../../services/api'
@@ -264,36 +265,26 @@ export function RatesPage() {
             <label htmlFor="rate_order_type" className="block text-sm font-medium text-slate-700">
               Order type
             </label>
-            <select
+            <Select
               id="rate_order_type"
               value={newOrderType}
-              onChange={(e) => setNewOrderType(e.target.value as OrderType)}
-              className="mt-1 rounded-md border border-slate-300 px-3 py-2 text-sm"
-            >
-              {ORDER_TYPES.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => setNewOrderType(v as OrderType)}
+              options={ORDER_TYPES.map((t) => ({ value: t, label: t }))}
+              className="mt-1 w-32"
+            />
           </div>
 
           <div>
             <label htmlFor="rate_zone_relationship" className="block text-sm font-medium text-slate-700">
               Zone relationship
             </label>
-            <select
+            <Select
               id="rate_zone_relationship"
               value={newZoneRelationship}
-              onChange={(e) => setNewZoneRelationship(e.target.value as ZoneRelationship)}
-              className="mt-1 rounded-md border border-slate-300 px-3 py-2 text-sm"
-            >
-              {ZONE_RELATIONSHIPS.map((r) => (
-                <option key={r} value={r}>
-                  {r}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => setNewZoneRelationship(v as ZoneRelationship)}
+              options={ZONE_RELATIONSHIPS.map((r) => ({ value: r, label: r }))}
+              className="mt-1 w-36"
+            />
           </div>
 
           <div>

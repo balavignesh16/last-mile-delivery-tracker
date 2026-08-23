@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { AreaPicker } from '../components/AreaPicker'
 import { ErrorBanner } from '../components/ErrorBanner'
 import { Layout } from '../components/Layout'
+import { Select } from '../components/Select'
 import { useAuth } from '../hooks/useAuth'
 import { ApiError } from '../services/api'
 import { requestQuote } from '../services/quote'
@@ -200,35 +201,25 @@ export function QuotePage() {
             <label htmlFor="quote_order_type" className="block text-xs font-medium text-slate-700">
               Order type
             </label>
-            <select
+            <Select
               id="quote_order_type"
               value={orderType}
-              onChange={(e) => setOrderType(e.target.value as OrderType)}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            >
-              {ORDER_TYPES.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => setOrderType(v as OrderType)}
+              options={ORDER_TYPES.map((t) => ({ value: t, label: t }))}
+              className="mt-1"
+            />
           </div>
           <div>
             <label htmlFor="quote_payment_type" className="block text-xs font-medium text-slate-700">
               Payment type
             </label>
-            <select
+            <Select
               id="quote_payment_type"
               value={paymentType}
-              onChange={(e) => setPaymentType(e.target.value as PaymentType)}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            >
-              {PAYMENT_TYPES.map((t) => (
-                <option key={t} value={t}>
-                  {t}
-                </option>
-              ))}
-            </select>
+              onChange={(v) => setPaymentType(v as PaymentType)}
+              options={PAYMENT_TYPES.map((t) => ({ value: t, label: t }))}
+              className="mt-1"
+            />
           </div>
         </fieldset>
 
