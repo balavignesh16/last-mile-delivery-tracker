@@ -42,9 +42,10 @@ export function Layout({ children }: { children: ReactNode }) {
   const location = useLocation()
 
   const navItems = user ? NAV_ITEMS[user.role] : []
+  const authenticated = status === 'authenticated' && user
 
   return (
-    <div className="flex min-h-screen flex-col bg-navy-50 text-slate-900">
+    <div className={authenticated ? 'min-h-screen bg-navy-50 text-slate-900' : 'flex min-h-screen flex-col bg-navy-50 text-slate-900'}>
       <header className="sticky top-0 z-10 border-b border-navy-100 bg-white/90 backdrop-blur-sm">
         <div className="mx-auto flex max-w-6xl items-center justify-between gap-4 px-6 py-3.5">
           <Link
@@ -109,8 +110,10 @@ export function Layout({ children }: { children: ReactNode }) {
           )}
         </div>
       </header>
-      <main className="page-fade-in mx-auto w-full max-w-6xl flex-1 px-6 py-10">{children}</main>
-      <Footer />
+      <main className={authenticated ? 'page-fade-in mx-auto w-full max-w-6xl px-6 py-10' : 'page-fade-in mx-auto w-full max-w-6xl flex-1 px-6 py-10'}>
+        {children}
+      </main>
+      {!authenticated && <Footer />}
     </div>
   )
 }
