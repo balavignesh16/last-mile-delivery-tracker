@@ -180,6 +180,35 @@ describe('AgentsPage', () => {
     expect(screen.getByText('existing@example.com')).toBeTruthy()
   })
 
+  it('search filters the agent list by name or email, client-side', async () => {
+    mockAdminAuth()
+    const agentA = {
+      id: 'a1', user_id: 'u1', full_name: 'Alice Agent', email: 'alice@example.com', phone: null,
+      availability: 'AVAILABLE', current_lat: null, current_lng: null, current_zone_id: null,
+      location_updated_at: null, last_assigned_at: null, active: true, created_at: '2026-01-01T00:00:00Z',
+    }
+    const agentB = {
+      id: 'a2', user_id: 'u2', full_name: 'Bob Agent', email: 'bob@example.com', phone: null,
+      availability: 'AVAILABLE', current_lat: null, current_lng: null, current_zone_id: null,
+      location_updated_at: null, last_assigned_at: null, active: true, created_at: '2026-01-01T00:00:00Z',
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, [agentA, agentB])))
+
+    render(
+      <MemoryRouter>
+        <AgentsPage />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText('Alice Agent')).toBeTruthy())
+    expect(screen.getByText('Bob Agent')).toBeTruthy()
+
+    fireEvent.change(screen.getByLabelText('Search agents'), { target: { value: 'alice' } })
+
+    await waitFor(() => expect(screen.queryByText('Bob Agent')).toBeNull())
+    expect(screen.getByText('Alice Agent')).toBeTruthy()
+  })
+
   it('creates an agent and adds it to the list', async () => {
     mockAdminAuth()
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {

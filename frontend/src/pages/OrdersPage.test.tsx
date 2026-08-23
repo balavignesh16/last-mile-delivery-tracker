@@ -242,4 +242,73 @@ describe('OrdersPage', () => {
     await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => String(url) === '/api/v1/orders').length).toBeGreaterThan(0))
     expect(screen.queryByRole('button', { name: 'Clear filters' })).toBeNull()
   })
+
+  // --- Round 2: client-side search + sort ---
+
+  it('search is available to a CUSTOMER (not just an ADMIN) and filters the already-loaded list', async () => {
+    mockAuth('CUSTOMER')
+    const otherOrder = { ...order, id: 'order-2', order_type: 'B2B', final_amount: 120 }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, [order, otherOrder])))
+
+    render(
+      <MemoryRouter>
+        <OrdersPage />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText(/B2C · order-1/)).toBeTruthy())
+    expect(screen.getByText(/B2B · order-2/)).toBeTruthy()
+
+    fireEvent.change(screen.getByLabelText('Search'), { target: { value: 'B2B' } })
+
+    await waitFor(() => expect(screen.queryByText(/B2C · order-1/)).toBeNull())
+    expect(screen.getByText(/B2B · order-2/)).toBeTruthy()
+  })
+
+  it('shows a distinct empty state when a search matches nothing, and "Clear filters" resets it', async () => {
+    mockAuth('CUSTOMER')
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, [order])))
+
+    render(
+      <MemoryRouter>
+        <OrdersPage />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText(/B2C · order-1/)).toBeTruthy())
+    fireEvent.change(screen.getByLabelText('Search'), { target: { value: 'no-such-order' } })
+
+    await waitFor(() => expect(screen.getByText('No orders match your search.')).toBeTruthy())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }))
+    await waitFor(() => expect(screen.getByText(/B2C · order-1/)).toBeTruthy())
+  })
+
+  it('sorts by amount when the Amount column header is clicked, toggling direction on a second click', async () => {
+    mockAuth('CUSTOMER')
+    const cheap = { ...order, id: 'order-cheap', final_amount: 10 }
+    const expensive = { ...order, id: 'order-expensive', final_amount: 500 }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, [cheap, expensive])))
+
+    render(
+      <MemoryRouter>
+        <OrdersPage />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText('₹10.00')).toBeTruthy())
+
+    function orderedAmounts() {
+      return screen.getAllByText(/^₹/).map((el) => el.textContent)
+    }
+
+    // Default load order (server order, both present) before any sort.
+    expect(orderedAmounts()).toEqual(['₹10.00', '₹500.00'])
+
+    fireEvent.click(screen.getByRole('button', { name: 'Amount' }))
+    await waitFor(() => expect(orderedAmounts()).toEqual(['₹500.00', '₹10.00'])) // first click: desc (highest first)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Amount' }))
+    await waitFor(() => expect(orderedAmounts()).toEqual(['₹10.00', '₹500.00'])) // second click: asc
+  })
 })

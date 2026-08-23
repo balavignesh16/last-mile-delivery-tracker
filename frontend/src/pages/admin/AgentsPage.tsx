@@ -1,5 +1,5 @@
-import { Users } from 'lucide-react'
-import { useEffect, useState, type FormEvent } from 'react'
+import { Search, Users } from 'lucide-react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { ErrorBanner } from '../../components/ErrorBanner'
 import { Layout } from '../../components/Layout'
@@ -50,6 +50,8 @@ export function AgentsPage() {
   const [createError, setCreateError] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
 
+  const [agentSearch, setAgentSearch] = useState('')
+
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null)
   const [activeError, setActiveError] = useState<string | null>(null)
   const [togglingActive, setTogglingActive] = useState(false)
@@ -59,6 +61,14 @@ export function AgentsPage() {
   const [ordersError, setOrdersError] = useState<string | null>(null)
 
   const selectedAgent = agents.find((a) => a.id === selectedAgentId) ?? null
+
+  // Client-side only, over the already-loaded agent list — no new
+  // endpoint, same reasoning as OrdersPage's own search.
+  const filteredAgents = useMemo(() => {
+    const q = agentSearch.trim().toLowerCase()
+    if (!q) return agents
+    return agents.filter((a) => a.full_name.toLowerCase().includes(q) || a.email.toLowerCase().includes(q))
+  }, [agents, agentSearch])
 
   useEffect(() => {
     if (!token) return
@@ -240,15 +250,32 @@ export function AgentsPage() {
 
       <div className="mt-6 grid gap-6 md:grid-cols-2">
         <div className="rounded-lg border border-navy-100 bg-white shadow-sm">
-          <h2 className="border-b border-navy-100 px-6 py-4 text-sm font-semibold text-slate-700">All agents</h2>
+          <div className="border-b border-navy-100 px-6 py-4">
+            <h2 className="text-sm font-semibold text-slate-700">All agents</h2>
+            {agents.length > 0 && (
+              <div className="relative mt-3">
+                <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-slate-400" aria-hidden="true" />
+                <input
+                  type="text"
+                  aria-label="Search agents"
+                  value={agentSearch}
+                  onChange={(e) => setAgentSearch(e.target.value)}
+                  placeholder="Search by name or email…"
+                  className="w-full rounded-md border border-slate-300 py-1.5 pr-3 pl-9 text-sm transition-colors focus:border-navy-500"
+                />
+              </div>
+            )}
+          </div>
           <ErrorBanner message={loadError} />
           {loading ? (
             <p className="px-6 py-4 text-sm text-slate-500">Loading…</p>
           ) : agents.length === 0 ? (
             <p className="px-6 py-4 text-sm text-slate-500">No agents yet.</p>
+          ) : filteredAgents.length === 0 ? (
+            <p className="px-6 py-4 text-sm text-slate-500">No agents match your search.</p>
           ) : (
             <ul>
-              {agents.map((agent) => (
+              {filteredAgents.map((agent) => (
                 <li key={agent.id} className="border-t border-slate-100 first:border-t-0">
                   <button
                     type="button"
