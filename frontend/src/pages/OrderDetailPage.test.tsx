@@ -225,8 +225,8 @@ describe('OrderDetailPage', () => {
 
     await waitFor(() => expect(screen.getByText('Update status')).toBeTruthy())
     // order.status is CREATED -> only ASSIGNED is a legal next status.
-    expect(screen.getByRole('button', { name: 'Mark as ASSIGNED' })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /Mark as DELIVERED/ })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Mark as Assigned' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Mark as Delivered/ })).toBeNull()
   })
 
   it('admin transition posts to the status endpoint and refreshes order + timeline', async () => {
@@ -249,8 +249,8 @@ describe('OrderDetailPage', () => {
 
     renderAt('/orders/order-1')
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Mark as ASSIGNED' })).toBeTruthy())
-    fireEvent.click(screen.getByRole('button', { name: 'Mark as ASSIGNED' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Mark as Assigned' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Mark as Assigned' }))
 
     await waitFor(() => expect(screen.getByText('Assigned', { selector: 'span' })).toBeTruthy())
 
@@ -275,8 +275,8 @@ describe('OrderDetailPage', () => {
 
     renderAt('/orders/order-1')
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Mark as ASSIGNED' })).toBeTruthy())
-    fireEvent.click(screen.getByRole('button', { name: 'Mark as ASSIGNED' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Mark as Assigned' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Mark as Assigned' }))
 
     await waitFor(() => expect(screen.getByText("this status transition is not permitted from the order's current status")).toBeTruthy())
   })
@@ -446,7 +446,7 @@ describe('OrderDetailPage', () => {
     await waitFor(() => expect(screen.getByText('Update status')).toBeTruthy())
     // ASSIGNED -> PICKED_UP is the only edge a DELIVERY_AGENT may
     // perform from ASSIGNED (internal/tracking/statemachine.go).
-    expect(screen.getByRole('button', { name: 'Mark as PICKED_UP' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Mark as Picked up' })).toBeTruthy()
   })
 
   it('a DELIVERY_AGENT transition posts to the status endpoint and refreshes the order', async () => {
@@ -472,8 +472,8 @@ describe('OrderDetailPage', () => {
 
     renderAt('/orders/order-1')
 
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Mark as PICKED_UP' })).toBeTruthy())
-    fireEvent.click(screen.getByRole('button', { name: 'Mark as PICKED_UP' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Mark as Picked up' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Mark as Picked up' }))
 
     await waitFor(() => expect(screen.getByText('Picked up', { selector: 'span' })).toBeTruthy())
 

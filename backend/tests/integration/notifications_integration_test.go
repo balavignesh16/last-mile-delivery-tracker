@@ -36,9 +36,10 @@ import (
 // can assert on exactly what was attempted.
 
 type recordedMessage struct {
-	To      string
-	Subject string
-	Body    string
+	To       string
+	Subject  string
+	Body     string
+	HTMLBody string
 }
 
 type fakeIntegrationEmailProvider struct {
@@ -52,14 +53,14 @@ func newFakeIntegrationEmailProvider() *fakeIntegrationEmailProvider {
 	return &fakeIntegrationEmailProvider{callsTo: map[string]int{}, failFor: map[string]bool{}}
 }
 
-func (f *fakeIntegrationEmailProvider) SendEmail(_ context.Context, to, subject, body string) error {
+func (f *fakeIntegrationEmailProvider) SendEmail(_ context.Context, to, subject, body, htmlBody string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.callsTo[to]++
 	if f.failFor[to] {
 		return errors.New("simulated email provider failure")
 	}
-	f.sent = append(f.sent, recordedMessage{To: to, Subject: subject, Body: body})
+	f.sent = append(f.sent, recordedMessage{To: to, Subject: subject, Body: body, HTMLBody: htmlBody})
 	return nil
 }
 
@@ -531,10 +532,13 @@ func TestNotificationFlow_ProviderFailureDoesNotBreakLifecycleCommit(t *testing.
 	// event fired so far: ORDER_CREATED, AGENT_ASSIGNED, PICKED_UP) —
 	// exactly one of them must be the AGENT_ASSIGNED message, since SMS
 	// is a separate, unaffected channel from the forced EMAIL failure.
+	// "Assigned agent:" is the detail line buildContent only ever adds
+	// for EventAgentAssigned, so it uniquely identifies that message
+	// among the three without depending on the body's exact wording.
 	msgs := smsP.messagesTo("+15559998888")
 	assignedSmsCount := 0
 	for _, m := range msgs {
-		if containsAll(m.Body, "AGENT_ASSIGNED") {
+		if containsAll(m.Body, "Assigned agent:") {
 			assignedSmsCount++
 		}
 	}

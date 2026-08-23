@@ -138,7 +138,7 @@ func (s *Service) notify(ctx context.Context, trackingEventID, orderID string, e
 	msg := buildContent(eventType, orderID, metadata)
 
 	s.dispatch(ctx, trackingEventID, orderID, eventType, ChannelEmail, customer.Email, func() error {
-		return s.emailProvider.SendEmail(ctx, customer.Email, msg.Subject, msg.Body)
+		return s.emailProvider.SendEmail(ctx, customer.Email, msg.Subject, msg.Body, msg.HTMLBody)
 	})
 
 	// SMS is attempted only when the customer has a phone number on

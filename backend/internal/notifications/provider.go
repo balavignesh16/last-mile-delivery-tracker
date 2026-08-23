@@ -14,7 +14,13 @@ import (
 // interface, matching this project's own general preference for narrow,
 // single-purpose types.
 type EmailProvider interface {
-	SendEmail(ctx context.Context, to, subject, body string) error
+	// htmlBody is the branded HTML rendering of the identical content
+	// textBody carries in plain text — see buildHTMLBody in
+	// email_template.go. A provider that cannot send HTML (there is
+	// none today) could simply ignore it; every provider this project
+	// ships forwards it as the message's HTML part alongside textBody
+	// as the plain-text part/fallback.
+	SendEmail(ctx context.Context, to, subject, textBody, htmlBody string) error
 }
 
 type SmsProvider interface {
@@ -32,8 +38,8 @@ type LogEmailProvider struct{}
 
 func NewLogEmailProvider() LogEmailProvider { return LogEmailProvider{} }
 
-func (LogEmailProvider) SendEmail(_ context.Context, to, subject, body string) error {
-	slog.Info("email notification", "to", to, "subject", subject, "body", body)
+func (LogEmailProvider) SendEmail(_ context.Context, to, subject, textBody, htmlBody string) error {
+	slog.Info("email notification", "to", to, "subject", subject, "body", textBody, "html_included", htmlBody != "")
 	return nil
 }
 

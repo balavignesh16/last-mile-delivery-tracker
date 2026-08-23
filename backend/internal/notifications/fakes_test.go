@@ -69,9 +69,10 @@ func (f *fakeNotificationsRepo) statusOf(id string) (Status, bool) {
 // --- fakeEmailProvider / fakeSmsProvider ---
 
 type sentMessage struct {
-	To      string
-	Subject string
-	Body    string
+	To       string
+	Subject  string
+	Body     string
+	HTMLBody string
 }
 
 type fakeEmailProvider struct {
@@ -80,13 +81,13 @@ type fakeEmailProvider struct {
 	sendErr error
 }
 
-func (f *fakeEmailProvider) SendEmail(_ context.Context, to, subject, body string) error {
+func (f *fakeEmailProvider) SendEmail(_ context.Context, to, subject, body, htmlBody string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.sendErr != nil {
 		return f.sendErr
 	}
-	f.sent = append(f.sent, sentMessage{To: to, Subject: subject, Body: body})
+	f.sent = append(f.sent, sentMessage{To: to, Subject: subject, Body: body, HTMLBody: htmlBody})
 	return nil
 }
 

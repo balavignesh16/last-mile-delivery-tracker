@@ -49,8 +49,8 @@ func TestNotifyTransition_EveryLifecycleEventRecognized(t *testing.T) {
 			if email.count() != 1 {
 				t.Fatalf("email count = %d, want 1", email.count())
 			}
-			if !strings.Contains(email.sent[0].Subject, string(tc.want)) {
-				t.Errorf("subject = %q, want it to mention %s", email.sent[0].Subject, tc.want)
+			if !strings.Contains(email.sent[0].Subject, eventHeadline[tc.want]) {
+				t.Errorf("subject = %q, want it to mention %q", email.sent[0].Subject, eventHeadline[tc.want])
 			}
 		})
 	}
@@ -192,8 +192,11 @@ func TestNotifyOrderCreated_ResolvesInitialTrackingEvent(t *testing.T) {
 	if email.count() != 1 {
 		t.Fatalf("email count = %d, want 1", email.count())
 	}
-	if !strings.Contains(email.sent[0].Subject, "ORDER_CREATED") {
-		t.Errorf("subject = %q, want it to mention ORDER_CREATED", email.sent[0].Subject)
+	if !strings.Contains(email.sent[0].Subject, eventHeadline[EventOrderCreated]) {
+		t.Errorf("subject = %q, want it to mention %q", email.sent[0].Subject, eventHeadline[EventOrderCreated])
+	}
+	if email.sent[0].HTMLBody == "" {
+		t.Errorf("HTMLBody is empty, want a rendered HTML email body")
 	}
 	// Idempotency anchor must be the real tracking event id, not a
 	// synthesized one.
@@ -271,7 +274,7 @@ func TestNotifyTransition_ProviderPanicContained(t *testing.T) {
 
 type panicEmailProvider struct{}
 
-func (panicEmailProvider) SendEmail(context.Context, string, string, string) error {
+func (panicEmailProvider) SendEmail(context.Context, string, string, string, string) error {
 	panic("provider exploded")
 }
 

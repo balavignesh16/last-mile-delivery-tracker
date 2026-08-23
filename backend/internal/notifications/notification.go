@@ -58,13 +58,49 @@ const (
 	StatusFailed  Status = "FAILED"
 )
 
-// content is the minimal, data-only payload every notification
-// attempt carries — no exact wording is mandated by either source
-// document (see docs/notifications.md); this is deliberately plain
-// text, never HTML, never templated, never localized.
+// content is the message payload every notification attempt carries —
+// no exact wording is mandated by either source document (see
+// docs/notifications.md). Body is plain text: it is what SMS sends
+// as-is, and what email sends as its plain-text part/fallback. HTMLBody
+// is the branded HTML rendering of the identical information, sent as
+// email's HTML part (see email_template.go) — SMS has no HTML
+// equivalent and never uses it.
 type content struct {
-	Subject string
-	Body    string
+	Subject  string
+	Body     string
+	HTMLBody string
+}
+
+// eventHeadline is the one-sentence, human-readable description of each
+// event — used as the email subject (see orderReference below) and as
+// the plain-text/HTML body's opening sentence. Exhaustive over the same
+// eight EventType constants declared above; every event this package
+// ever builds content for has an entry.
+var eventHeadline = map[EventType]string{
+	EventOrderCreated:   "Your order has been placed",
+	EventAgentAssigned:  "A delivery agent has been assigned to your order",
+	EventPickedUp:       "Your order has been picked up",
+	EventInTransit:      "Your order is in transit",
+	EventOutForDelivery: "Your order is out for delivery",
+	EventDelivered:      "Your order has been delivered",
+	EventFailed:         "We couldn't complete your delivery",
+	EventRescheduled:    "Your delivery has been rescheduled",
+}
+
+// eventStatusLabel is the short noun-phrase shown as the HTML email's
+// status pill (email_template.go) — deliberately distinct from
+// eventHeadline's full sentence, the same way the frontend's
+// STATUS_LABEL (frontend/src/components/order-status.ts) is a short
+// label rather than a sentence.
+var eventStatusLabel = map[EventType]string{
+	EventOrderCreated:   "Order Placed",
+	EventAgentAssigned:  "Agent Assigned",
+	EventPickedUp:       "Picked Up",
+	EventInTransit:      "In Transit",
+	EventOutForDelivery: "Out for Delivery",
+	EventDelivered:      "Delivered",
+	EventFailed:         "Delivery Failed",
+	EventRescheduled:    "Rescheduled",
 }
 
 // buildContent generates the one, shared message used for both the
@@ -73,7 +109,7 @@ type content struct {
 // the tracking event's own raw JSON metadata (nil/empty is valid and
 // produces the generic message with no extra detail line).
 func buildContent(event EventType, orderID string, metadata json.RawMessage) content {
-	body := "Your order " + orderID + " status changed to " + string(event) + "."
+	headline := eventHeadline[event]
 
 	var m map[string]any
 	if len(metadata) > 0 {
@@ -83,26 +119,46 @@ func buildContent(event EventType, orderID string, metadata json.RawMessage) con
 		_ = json.Unmarshal(metadata, &m)
 	}
 
+	var extras []string
 	switch event {
 	case EventFailed:
 		if reason, ok := m["failure_reason"].(string); ok && reason != "" {
-			body += " Reason: " + reason + "."
+			extras = append(extras, "Reason: "+reason)
 		}
 	case EventRescheduled:
 		if date, ok := m["requested_date"].(string); ok && date != "" {
-			body += " New delivery date: " + date + "."
+			extras = append(extras, "New delivery date: "+date)
 		}
 		if reason, ok := m["reason"].(string); ok && reason != "" {
-			body += " Reason: " + reason + "."
+			extras = append(extras, "Reason: "+reason)
 		}
 	case EventAgentAssigned:
 		if agentID, ok := m["assigned_agent_id"].(string); ok && agentID != "" {
-			body += " Assigned agent: " + agentID + "."
+			extras = append(extras, "Assigned agent: "+agentID)
 		}
 	}
 
-	return content{
-		Subject: "Order " + orderID + ": " + string(event),
-		Body:    body,
+	body := headline + ". Order " + orderID + "."
+	for _, e := range extras {
+		body += " " + e + "."
 	}
+
+	return content{
+		Subject:  headline + " · Order #" + orderReference(orderID),
+		Body:     body,
+		HTMLBody: buildHTMLBody(event, eventStatusLabel[event], headline, orderID, extras),
+	}
+}
+
+// orderReference is a short, still-unambiguous prefix of the real order
+// id for use in the email subject line — real ecommerce notifications
+// don't put a full identifier in the subject, but the subject should
+// still be searchable against the order. This is a substring of the
+// real id (a UUID's first 8 characters, which is exactly its first
+// hyphen-delimited segment), never a separately invented order number.
+func orderReference(orderID string) string {
+	if len(orderID) > 8 {
+		return orderID[:8]
+	}
+	return orderID
 }

@@ -258,7 +258,7 @@ out of sync with it. See [`docs/rate-calculation.md`](docs/rate-calculation.md).
 
 Facts only, each verifiable directly against this repository:
 
-- **484 Go test functions** across 47 backend test files — unit,
+- **489 Go test functions** across 47 backend test files — unit,
   integration (`-tags integration`, against a real PostgreSQL instance),
   and end-to-end (`-tags e2e`, real router + real database) suites.
 - **228 frontend tests** across 30 files (Vitest + Testing Library).
@@ -1361,3 +1361,6 @@ Grows with each module.
 | OpenAPI document cannot silently drift from the real router | `backend/tests/e2e/openapi_contract_test.go` | `TestOpenAPIContract_DocumentedPathsMatchRealRoutes` (`-tags=e2e`) | `docs/openapi.yaml` |
 | Supporting indexes on every column the M12 order filter can query | `backend/migrations/0013_add_order_filter_indexes.sql` | verified present via `\d orders` against a fresh database | `README.md` |
 | `current_zone_id` write path — a real agent can now become eligible for auto-assignment via the app itself, not just direct SQL | `backend/internal/agents/handler.go` (`UpdateZoneHandler`), `routes.go`, `repository.go` | `TestUpdateZoneHandler_*` (unit), `TestUpdateAgentZone_*` (integration), live-verified against a running container (success, unknown-zone 422, admin-forbidden 403) | `docs/user-agent-management.md` |
+| Admin places an order on a customer's behalf by email lookup, not a raw customer id | `backend/internal/auth/handler.go` (`LookupCustomerHandler`), `frontend/src/pages/CreateOrderPage.tsx` | `TestLookupCustomerHandler_*` (unit, incl. identical-404 for unknown vs. non-customer email) | `docs/api.md` |
+| Tracking events and reschedule requests record the real actor's role, not just their id (`actor_role`, `requested_by_role`), never backfilled for historical rows | `backend/migrations/0015_add_actor_role_to_events.sql`, `internal/tracking/repository.go`, `internal/rescheduling/repository.go` | `TestRescheduleFlow_CustomerHappyPath`/`_AdminHappyPath` (integration, assert the real caller's role — not the ADMIN role used only for M08 edge authorization — is what gets persisted) | `docs/failed-delivery.md` |
+| Branded HTML email notifications, with an escaped plain-text fallback | `backend/internal/notifications/email_template.go`, `notification.go` | `TestBuildContent_HTMLBody*` (incl. an XSS-style escaping case for untrusted metadata text) | `docs/notifications.md` |

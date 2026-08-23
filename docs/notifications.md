@@ -87,11 +87,43 @@ request input.
   non-empty value. A missing phone is never an error — it is simply
   not applicable, and produces no SMS row at all (not a `FAILED` one).
 
+## Message content
+
+`buildContent` (`internal/notifications/notification.go`) builds one
+`content{Subject, Body, HTMLBody}` per event occurrence, shared by both
+channels:
+
+- **Subject** and **Body** are a human-readable sentence per event (e.g.
+  "Your order is in transit"), not the raw `EventType`/status string —
+  the subject also carries a short, still-traceable order reference (a
+  UUID's first 8 characters, not a separately invented order number),
+  matching how real ecommerce subjects read.
+- **Body** is plain text — sent as-is for SMS, and as email's
+  plain-text part/fallback.
+- **HTMLBody** (`internal/notifications/email_template.go`) is a
+  branded HTML rendering of the identical information — a status pill
+  colored to match the exact same status the frontend's
+  `STATUS_STYLE` (`frontend/src/components/order-status.ts`) already
+  uses, the headline, an order-id detail box, and any event-specific
+  detail line (failure reason, reschedule date, assigned agent).
+  Table-based layout, inline styles only, no external asset — the
+  deliverability-safe subset every major email client renders
+  consistently. SMS has no HTML equivalent and never receives this
+  value.
+
+Every dynamic value inserted into `HTMLBody` is passed through
+`html.EscapeString` first. That matters specifically for the
+event-specific detail line: a failure reason or reschedule reason is
+customer/admin-supplied text stored in `order_tracking_events.metadata`,
+not a trusted constant — this is the one place in the codebase that
+renders untrusted text as HTML, and it must escape it. The plain-text
+`Body` needs no such escaping.
+
 ## Provider abstraction
 
 ```go
 type EmailProvider interface {
-    SendEmail(ctx context.Context, to, subject, body string) error
+    SendEmail(ctx context.Context, to, subject, textBody, htmlBody string) error
 }
 type SmsProvider interface {
     SendSMS(ctx context.Context, to, body string) error

@@ -125,9 +125,9 @@ type countingEmailProvider struct {
 	count *int
 }
 
-func (c countingEmailProvider) SendEmail(_ context.Context, to, subject, body string) error {
+func (c countingEmailProvider) SendEmail(_ context.Context, to, subject, body, htmlBody string) error {
 	*c.count++
-	slog.Info("email notification", "to", to, "subject", subject, "body", body)
+	slog.Info("email notification", "to", to, "subject", subject, "body", body, "html_included", htmlBody != "")
 	return nil
 }
 

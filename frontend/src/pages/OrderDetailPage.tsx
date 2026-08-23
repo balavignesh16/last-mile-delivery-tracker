@@ -562,7 +562,7 @@ export function OrderDetailPage() {
                                 disabled={transitioning !== null}
                                 className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
                               >
-                                {transitioning === next ? 'Updating…' : `Mark as ${next}`}
+                                {transitioning === next ? 'Updating…' : `Mark as ${STATUS_LABEL[next]}`}
                               </button>
                             ))}
                           </div>

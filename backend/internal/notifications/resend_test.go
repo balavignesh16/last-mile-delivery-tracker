@@ -30,7 +30,7 @@ func TestResendEmailProvider_SendsExpectedRequest(t *testing.T) {
 	})
 
 	p := NewResendEmailProvider("re_test_key", "orders@example.com")
-	err := p.SendEmail(context.Background(), "customer@example.com", "Order X: DELIVERED", "Your order is delivered.")
+	err := p.SendEmail(context.Background(), "customer@example.com", "Order X: DELIVERED", "Your order is delivered.", "<html>Your order is delivered.</html>")
 	if err != nil {
 		t.Fatalf("SendEmail() error: %v", err)
 	}
@@ -53,6 +53,9 @@ func TestResendEmailProvider_SendsExpectedRequest(t *testing.T) {
 	if gotBody.Text != "Your order is delivered." {
 		t.Errorf("Text = %q, want %q", gotBody.Text, "Your order is delivered.")
 	}
+	if gotBody.HTML != "<html>Your order is delivered.</html>" {
+		t.Errorf("HTML = %q, want %q", gotBody.HTML, "<html>Your order is delivered.</html>")
+	}
 }
 
 func TestResendEmailProvider_NonSuccessStatusIsError(t *testing.T) {
@@ -62,7 +65,7 @@ func TestResendEmailProvider_NonSuccessStatusIsError(t *testing.T) {
 	})
 
 	p := NewResendEmailProvider("bad-key", "orders@example.com")
-	err := p.SendEmail(context.Background(), "customer@example.com", "subject", "body")
+	err := p.SendEmail(context.Background(), "customer@example.com", "subject", "body", "<html>body</html>")
 	if err == nil {
 		t.Fatal("expected an error for a non-2xx response, got nil")
 	}
@@ -74,7 +77,7 @@ func TestResendEmailProvider_UnreachableServerIsError(t *testing.T) {
 	t.Cleanup(func() { resendAPIURL = original })
 
 	p := NewResendEmailProvider("re_test_key", "orders@example.com")
-	err := p.SendEmail(context.Background(), "customer@example.com", "subject", "body")
+	err := p.SendEmail(context.Background(), "customer@example.com", "subject", "body", "<html>body</html>")
 	if err == nil {
 		t.Fatal("expected an error when the provider is unreachable, got nil")
 	}

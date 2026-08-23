@@ -48,11 +48,12 @@ type resendEmailRequest struct {
 	To      []string `json:"to"`
 	Subject string   `json:"subject"`
 	Text    string   `json:"text"`
+	HTML    string   `json:"html,omitempty"`
 }
 
-func (p ResendEmailProvider) SendEmail(ctx context.Context, to, subject, body string) error {
+func (p ResendEmailProvider) SendEmail(ctx context.Context, to, subject, textBody, htmlBody string) error {
 	payload, err := json.Marshal(resendEmailRequest{
-		From: p.fromAddr, To: []string{to}, Subject: subject, Text: body,
+		From: p.fromAddr, To: []string{to}, Subject: subject, Text: textBody, HTML: htmlBody,
 	})
 	if err != nil {
 		return fmt.Errorf("resend: encode request: %w", err)
