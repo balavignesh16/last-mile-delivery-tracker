@@ -97,13 +97,48 @@ describe('admin DashboardPage', () => {
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getByText('FAILED')).toBeTruthy())
-    const failedCount = screen.getByText('FAILED').nextElementSibling
+    // Humanized labels (Round 3) — matches the status-label convention
+    // already used everywhere else in the app (OrderStatusBadge,
+    // OrdersPage), rather than the raw SCREAMING_SNAKE_CASE enum value.
+    await waitFor(() => expect(screen.getByText('Failed')).toBeTruthy())
+    const failedCount = screen.getByText('Failed').nextElementSibling
     expect(failedCount?.textContent).toBe('2')
-    const deliveredCount = screen.getByText('DELIVERED').nextElementSibling
+    const deliveredCount = screen.getByText('Delivered').nextElementSibling
     expect(deliveredCount?.textContent).toBe('1')
-    const assignedCount = screen.getByText('ASSIGNED').nextElementSibling
+    const assignedCount = screen.getByText('Assigned').nextElementSibling
     expect(assignedCount?.textContent).toBe('0')
+  })
+
+  it('shows the total order count and both charts when there are real orders', async () => {
+    mockAuth()
+    const orders = [order('FAILED', 'o-1'), order('DELIVERED', 'o-2')]
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, orders)))
+
+    render(
+      <MemoryRouter>
+        <DashboardPage />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText('2')).toBeTruthy())
+    expect(screen.getByText('total')).toBeTruthy()
+    expect(screen.getByText('Order volume, last 14 days')).toBeTruthy()
+    expect(screen.getByText('Status distribution')).toBeTruthy()
+  })
+
+  it('does not show the charts when there are no orders yet', async () => {
+    mockAuth()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, [])))
+
+    render(
+      <MemoryRouter>
+        <DashboardPage />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText('total')).toBeTruthy())
+    expect(screen.queryByText('Order volume, last 14 days')).toBeNull()
+    expect(screen.queryByText('Status distribution')).toBeNull()
   })
 
   it('shows an error banner when order statistics fail to load', async () => {
