@@ -131,6 +131,32 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "422": { $ref: "#/components/responses/Unprocessable" }
 
+  /api/v1/users/lookup:
+    get:
+      tags: [Users]
+      summary: >-
+        Resolve a customer's email to their user id (ADMIN only) — lets an
+        admin creating an order on a customer's behalf (POST /orders'
+        customer_id) find the id from the only thing they realistically
+        know, the customer's email. An email that doesn't exist and one
+        that belongs to a non-customer account both return the same 404,
+        so this can't be used to probe whether an email belongs to staff.
+      parameters:
+        - name: email
+          in: query
+          required: true
+          schema: { type: string, format: email }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CustomerLookupResult" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
   /api/v1/agents:
     post:
       tags: [Agents]
@@ -962,6 +988,17 @@ components:
         role: { type: string, enum: [CUSTOMER, DELIVERY_AGENT, ADMIN] }
         created_at: { type: string, format: date-time }
 
+    CustomerLookupResult:
+      type: object
+      description: >-
+        Deliberately narrower than User — no role/phone/created_at, since
+        this endpoint only ever returns a customer and only exists to
+        hand back the id.
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        full_name: { type: string }
+
     Agent:
       type: object
       properties:
@@ -1092,6 +1129,15 @@ components:
           type: string
           enum: [CREATED, ASSIGNED, PICKED_UP, IN_TRANSIT, OUT_FOR_DELIVERY, DELIVERED, FAILED, RESCHEDULED]
         actor_id: { type: string, format: uuid }
+        actor_role:
+          type: string
+          nullable: true
+          enum: [CUSTOMER, DELIVERY_AGENT, ADMIN]
+          description: >-
+            The actor's role at the time of this event. Null only for a
+            row written before migration 0015 added this column —
+            never backfilled, since there's no way to know a historical
+            actor's role after the fact.
         metadata:
           type: object
           nullable: true
@@ -1104,6 +1150,11 @@ components:
         id: { type: string, format: uuid }
         order_id: { type: string, format: uuid }
         requested_by: { type: string, format: uuid }
+        requested_by_role:
+          type: string
+          nullable: true
+          enum: [CUSTOMER, DELIVERY_AGENT, ADMIN]
+          description: Same null-for-historical-rows caveat as TrackingEvent.actor_role.
         requested_date: { type: string, format: date }
         reason: { type: string, nullable: true }
         created_at: { type: string, format: date-time }

@@ -63,6 +63,8 @@ const quoteResult = {
 
 const createdOrder = { id: 'order-1', status: 'CREATED' }
 
+const foundCustomer = { id: 'customer-99', email: 'shopper@example.com', full_name: 'Shopper Sam' }
+
 function fetchRouter() {
   return vi.fn((input: RequestInfo | URL, _init?: RequestInit) => {
     const url = String(input)
@@ -70,6 +72,7 @@ function fetchRouter() {
     if (url === '/api/v1/zones/zone-a/areas') return Promise.resolve(jsonResponse(200, [areaA1]))
     if (url === '/api/v1/orders/quote') return Promise.resolve(jsonResponse(200, quoteResult))
     if (url === '/api/v1/orders') return Promise.resolve(jsonResponse(201, createdOrder))
+    if (url === '/api/v1/users/lookup?email=shopper%40example.com') return Promise.resolve(jsonResponse(200, foundCustomer))
     return Promise.reject(new Error(`unexpected fetch: ${url}`))
   })
 }
@@ -112,7 +115,7 @@ describe('CreateOrderPage', () => {
     navigateMock.mockClear()
   })
 
-  it('does not show a customer_id field for a CUSTOMER caller', async () => {
+  it('does not show a customer-email lookup for a CUSTOMER caller', async () => {
     mockAuth('CUSTOMER')
     vi.stubGlobal('fetch', fetchRouter())
 
@@ -123,10 +126,10 @@ describe('CreateOrderPage', () => {
     )
 
     await waitForZonesLoaded()
-    expect(screen.queryByLabelText('Customer ID')).toBeNull()
+    expect(screen.queryByLabelText('Customer email')).toBeNull()
   })
 
-  it('shows a customer_id field for an ADMIN caller', async () => {
+  it('shows a customer-email lookup for an ADMIN caller', async () => {
     mockAuth('ADMIN')
     vi.stubGlobal('fetch', fetchRouter())
 
@@ -137,7 +140,7 @@ describe('CreateOrderPage', () => {
     )
 
     await waitForZonesLoaded()
-    expect(screen.getByLabelText('Customer ID')).toBeTruthy()
+    expect(screen.getByLabelText('Customer email')).toBeTruthy()
   })
 
   it('previews a quote and then confirms, navigating to the created order', async () => {
@@ -166,7 +169,7 @@ describe('CreateOrderPage', () => {
     expect(body.pickup_area_id).toBe('area-a1')
   })
 
-  it('admin confirm includes the entered customer_id', async () => {
+  it('resolves a customer by email and includes their id when admin confirms', async () => {
     mockAuth('ADMIN')
     const fetchMock = fetchRouter()
     vi.stubGlobal('fetch', fetchMock)
@@ -177,9 +180,11 @@ describe('CreateOrderPage', () => {
       </MemoryRouter>,
     )
     await waitForZonesLoaded()
-    fireEvent.change(screen.getByLabelText('Customer ID'), { target: { value: 'customer-99' } })
-    await fillAreas()
+    fireEvent.change(screen.getByLabelText('Customer email'), { target: { value: 'shopper@example.com' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Find customer' }))
+    await waitFor(() => expect(screen.getByText(/Ordering for Shopper Sam/)).toBeTruthy())
 
+    await fillAreas()
     fireEvent.click(screen.getByRole('button', { name: 'Preview quote' }))
     await waitFor(() => expect(screen.getByText('₹60.00')).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Confirm & place order' }))
@@ -189,6 +194,50 @@ describe('CreateOrderPage', () => {
     const [, init] = orderCall as [string, RequestInit]
     const body = JSON.parse(init.body as string) as Record<string, unknown>
     expect(body.customer_id).toBe('customer-99')
+  })
+
+  it('shows an error when no customer is found for the entered email', async () => {
+    mockAuth('ADMIN')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url === '/api/v1/zones') return Promise.resolve(jsonResponse(200, [zoneA]))
+        if (url === '/api/v1/users/lookup?email=nobody%40example.com') {
+          return Promise.resolve(jsonResponse(404, { error: 'no customer account found with this email' }))
+        }
+        return Promise.reject(new Error(`unexpected fetch: ${url}`))
+      }),
+    )
+
+    render(
+      <MemoryRouter>
+        <CreateOrderPage />
+      </MemoryRouter>,
+    )
+    await waitForZonesLoaded()
+    fireEvent.change(screen.getByLabelText('Customer email'), { target: { value: 'nobody@example.com' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Find customer' }))
+
+    await waitFor(() => expect(screen.getByText('no customer account found with this email')).toBeTruthy())
+    expect(screen.queryByText(/Ordering for/)).toBeNull()
+  })
+
+  it('blocks preview for an admin who has not resolved a customer yet', async () => {
+    mockAuth('ADMIN')
+    const fetchMock = fetchRouter()
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <MemoryRouter>
+        <CreateOrderPage />
+      </MemoryRouter>,
+    )
+    await fillAreas()
+    fireEvent.click(screen.getByRole('button', { name: 'Preview quote' }))
+
+    await waitFor(() => expect(screen.getByText('Find a customer by email before continuing.')).toBeTruthy())
+    expect(fetchMock).not.toHaveBeenCalledWith('/api/v1/orders/quote', expect.anything())
   })
 
   it('shows a validation error instead of calling the quote endpoint when areas are not selected', async () => {

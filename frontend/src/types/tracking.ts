@@ -10,6 +10,10 @@ export interface TrackingEvent {
   previous_status: OrderStatus | null
   new_status: OrderStatus
   actor_id: string
+  // null only for a row written before this column existed (migration
+  // 0015) — never backfilled, since there's no way to know a
+  // historical actor's role after the fact.
+  actor_role: Role | null
   metadata: Record<string, unknown> | null
   created_at: string
 }

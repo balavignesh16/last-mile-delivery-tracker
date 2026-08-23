@@ -15,10 +15,27 @@ import { getOrder } from '../services/orders'
 import { getReschedules, rescheduleOrder } from '../services/rescheduling'
 import { getOrderTracking, transitionOrderStatus } from '../services/tracking'
 import type { Agent } from '../types/agent'
+import type { Role } from '../types/auth'
 import type { Order } from '../types/order'
 import type { Reschedule } from '../types/reschedule'
 import { LEGAL_TRANSITIONS, transitionsForRole, type TrackingEvent } from '../types/tracking'
 import { formatCurrency } from '../utils/currency'
+
+const ACTOR_ROLE_LABEL: Record<Role, string> = {
+  ADMIN: 'an admin',
+  DELIVERY_AGENT: 'the delivery agent',
+  CUSTOMER: 'the customer',
+}
+
+// Describes who acted, as plainly as the data actually supports: "you"
+// when the viewer is the actor themselves (always reliable — actor_id
+// is a real user id), otherwise their role (actor_role, migration
+// 0015 — null only for a historical row from before that column
+// existed, shown honestly as "someone" rather than guessed).
+function describeActor(actorId: string, actorRole: Role | null, currentUserId: string | undefined): string {
+  if (currentUserId && actorId === currentUserId) return 'you'
+  return actorRole ? ACTOR_ROLE_LABEL[actorRole] : 'someone'
+}
 
 // ASSIGNED is only reachable from these two statuses in M08's state
 // machine (CREATED->ASSIGNED, RESCHEDULED->ASSIGNED) — the assignment
@@ -346,6 +363,11 @@ export function OrderDetailPage() {
                   <div>
                     <dt className="text-slate-500">Placed</dt>
                     <dd className="font-medium text-slate-900">{new Date(order.created_at).toLocaleString()}</dd>
+                    {order.created_by !== order.customer_id && (
+                      <dd className="mt-0.5 text-xs text-slate-500">
+                        {isCustomer ? 'By an admin, on your behalf' : "By an admin, on the customer's behalf"}
+                      </dd>
+                    )}
                   </div>
                   <div>
                     <dt className="text-slate-500">Assigned agent</dt>
@@ -390,7 +412,7 @@ export function OrderDetailPage() {
                                     ? `${STATUS_LABEL[event.previous_status]} → ${STATUS_LABEL[event.new_status]}`
                                     : STATUS_LABEL[event.new_status]}
                                 </p>
-                                <p className="text-xs text-slate-500">Actor: {event.actor_id}</p>
+                                <p className="text-xs text-slate-500">By {describeActor(event.actor_id, event.actor_role, user?.id)}</p>
                               </div>
                               <span className="whitespace-nowrap text-xs text-slate-400">{new Date(event.created_at).toLocaleString()}</span>
                             </div>
@@ -417,7 +439,7 @@ export function OrderDetailPage() {
                           <div>
                             <p className="font-medium text-slate-900">New date: {re.requested_date}</p>
                             {re.reason && <p className="text-xs text-slate-500">Reason: {re.reason}</p>}
-                            <p className="text-xs text-slate-500">Requested by: {re.requested_by}</p>
+                            <p className="text-xs text-slate-500">Requested by {describeActor(re.requested_by, re.requested_by_role, user?.id)}</p>
                           </div>
                           <span className="whitespace-nowrap text-xs text-slate-400">{new Date(re.created_at).toLocaleString()}</span>
                         </li>

@@ -8,7 +8,9 @@ import { useAuth } from '../hooks/useAuth'
 import { ApiError } from '../services/api'
 import { createOrder } from '../services/orders'
 import { requestQuote } from '../services/quote'
+import { lookupCustomerByEmail } from '../services/users'
 import { listAreas, listZones } from '../services/zones'
+import type { CustomerLookupResult } from '../types/auth'
 import type { PaymentType, QuoteResult } from '../types/quote'
 import type { OrderType } from '../types/rate'
 import type { Area, Zone } from '../types/zone'
@@ -24,11 +26,12 @@ const PAYMENT_TYPES: PaymentType[] = ['PREPAID', 'COD']
 // itself server-side — the previewed quote shown here is display-only
 // and is never sent to the server as a price; see docs/order-management.md.
 //
-// ADMIN additionally supplies which customer the order is for. There is
-// no customer-search/listing endpoint in this project (M07's API is
-// deliberately just the three order endpoints — see docs/api.md), so
-// an admin enters the customer's user id directly; the backend
-// validates it references a real CUSTOMER account before accepting it.
+// ADMIN additionally supplies which customer the order is for. POST
+// /orders itself still needs a raw customer_id (a UUID an admin has no
+// realistic way to already know) — GET /api/v1/users/lookup?email=...
+// resolves the one thing an admin actually knows, the customer's email,
+// into that id; the backend still validates it references a real
+// CUSTOMER account before accepting the order.
 export function CreateOrderPage() {
   const { token, user } = useAuth()
   const navigate = useNavigate()
@@ -47,7 +50,11 @@ export function CreateOrderPage() {
   const [dropAreas, setDropAreas] = useState<Area[]>([])
   const [dropAreasLoading, setDropAreasLoading] = useState(false)
 
-  const [customerId, setCustomerId] = useState('')
+  const [customerEmail, setCustomerEmail] = useState('')
+  const [resolvedCustomer, setResolvedCustomer] = useState<CustomerLookupResult | null>(null)
+  const [lookingUpCustomer, setLookingUpCustomer] = useState(false)
+  const [customerLookupError, setCustomerLookupError] = useState<string | null>(null)
+
   const [orderType, setOrderType] = useState<OrderType>('B2C')
   const [paymentType, setPaymentType] = useState<PaymentType>('PREPAID')
   const [lengthCm, setLengthCm] = useState('')
@@ -131,13 +138,31 @@ export function CreateOrderPage() {
     setPreview(null)
   }
 
+  async function handleLookupCustomer() {
+    if (!token) return
+    const email = customerEmail.trim()
+    if (!email) return
+    setCustomerLookupError(null)
+    setResolvedCustomer(null)
+    setLookingUpCustomer(true)
+    try {
+      const found = await lookupCustomerByEmail(token, email)
+      setResolvedCustomer(found)
+      setPreview(null)
+    } catch (err) {
+      setCustomerLookupError(err instanceof ApiError ? err.message : 'Could not find a customer with that email.')
+    } finally {
+      setLookingUpCustomer(false)
+    }
+  }
+
   function validatePackage(): { length: number; breadth: number; height: number; weight: number } | null {
     if (!pickupAreaId || !dropAreaId) {
       setPreviewError('Select a pickup area and a drop area.')
       return null
     }
-    if (isAdmin && !customerId.trim()) {
-      setPreviewError('Customer ID is required.')
+    if (isAdmin && !resolvedCustomer) {
+      setPreviewError('Find a customer by email before continuing.')
       return null
     }
     const length = Number(lengthCm)
@@ -200,7 +225,10 @@ export function CreateOrderPage() {
         height_cm: parsed.height,
         actual_weight_kg: parsed.weight,
       }
-      const created = isAdmin ? await createOrder(token, { ...packageInput, customer_id: customerId.trim() }) : await createOrder(token, packageInput)
+      const created =
+        isAdmin && resolvedCustomer
+          ? await createOrder(token, { ...packageInput, customer_id: resolvedCustomer.id })
+          : await createOrder(token, packageInput)
       navigate(`/orders/${created.id}`)
     } catch (err) {
       setConfirmError(err instanceof ApiError ? err.message : 'Could not create the order.')
@@ -251,20 +279,38 @@ export function CreateOrderPage() {
 
         {isAdmin && (
           <div>
-            <label htmlFor="order_customer_id" className="block text-xs font-medium text-slate-700">
-              Customer ID
+            <label htmlFor="order_customer_email" className="block text-xs font-medium text-slate-700">
+              Customer email
             </label>
-            <input
-              id="order_customer_id"
-              type="text"
-              value={customerId}
-              onChange={(e) => {
-                setCustomerId(e.target.value)
-                setPreview(null)
-              }}
-              placeholder="the customer's user id"
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            />
+            <div className="mt-1 flex gap-2">
+              <input
+                id="order_customer_email"
+                type="email"
+                value={customerEmail}
+                onChange={(e) => {
+                  setCustomerEmail(e.target.value)
+                  setResolvedCustomer(null)
+                  setCustomerLookupError(null)
+                  setPreview(null)
+                }}
+                placeholder="the customer's email"
+                className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+              />
+              <button
+                type="button"
+                onClick={() => void handleLookupCustomer()}
+                disabled={lookingUpCustomer || !customerEmail.trim()}
+                className="shrink-0 rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+              >
+                {lookingUpCustomer ? 'Finding…' : 'Find customer'}
+              </button>
+            </div>
+            {customerLookupError && <p className="mt-1 text-xs text-red-600">{customerLookupError}</p>}
+            {resolvedCustomer && (
+              <p className="mt-1 text-xs text-emerald-700">
+                Ordering for {resolvedCustomer.full_name} ({resolvedCustomer.email})
+              </p>
+            )}
           </div>
         )}
 

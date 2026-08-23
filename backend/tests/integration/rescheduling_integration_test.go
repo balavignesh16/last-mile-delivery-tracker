@@ -141,6 +141,13 @@ func TestRescheduleFlow_CustomerHappyPath(t *testing.T) {
 	if history[0]["requested_by"] != customerUser.ID {
 		t.Errorf("requested_by = %v, want the real customer id %v", history[0]["requested_by"], customerUser.ID)
 	}
+	// requested_by_role (migration 0015) must be the real caller's role,
+	// CUSTOMER — never ADMIN leaking in from the internal authorization
+	// workaround (Repository.Reschedule always authorizes the underlying
+	// edge as ADMIN regardless of who really asked).
+	if history[0]["requested_by_role"] != "CUSTOMER" {
+		t.Errorf("requested_by_role = %v, want CUSTOMER (the real caller's role, not the internal ADMIN authorization workaround)", history[0]["requested_by_role"])
+	}
 
 	// Tracking event persisted: previous_status=FAILED, new_status=RESCHEDULED,
 	// actor_id = the real customer (never RoleAdmin leaking into the
@@ -153,6 +160,11 @@ func TestRescheduleFlow_CustomerHappyPath(t *testing.T) {
 	}
 	if last["actor_id"] != customerUser.ID {
 		t.Errorf("actor_id = %v, want the real customer id %v (never a role name)", last["actor_id"], customerUser.ID)
+	}
+	// Same leak check as requested_by_role above, for the tracking
+	// event's own actor_role.
+	if last["actor_role"] != "CUSTOMER" {
+		t.Errorf("actor_role = %v, want CUSTOMER (not the internal ADMIN authorization workaround)", last["actor_role"])
 	}
 	metadata, _ := last["metadata"].(map[string]any)
 	if metadata == nil || metadata["requested_date"] != "2099-01-01" || metadata["reason"] != "Not available" {

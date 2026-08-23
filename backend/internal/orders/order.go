@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"lastmiletracker/internal/rates"
+	"lastmiletracker/internal/users"
 )
 
 // StatusCreated is the only status this module ever writes. The full
@@ -73,7 +74,13 @@ type Order struct {
 type CreateOrderInput struct {
 	CustomerID string
 	CreatedBy  string
-	Quote      rates.QuoteResult
+	// CreatedByRole is CreatedBy's role at creation time (CUSTOMER for a
+	// self-service order, ADMIN for one placed on a customer's behalf
+	// via CreateOrderHandler's admin branch) — persisted as the order's
+	// opening tracking event's actor_role (migration 0015), for the
+	// frontend to display who actually placed the order.
+	CreatedByRole users.Role
+	Quote         rates.QuoteResult
 }
 
 // OrderCreatedHook is called with the id of a newly created order,

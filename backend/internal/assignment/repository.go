@@ -102,7 +102,7 @@ func (r *PostgresRepository) Assign(ctx context.Context, orderID, agentID, actor
 		return orders.Order{}, ErrAgentNotEligible
 	}
 
-	event, err := r.trackingRepo.TransitionTx(ctx, tx, orderID, actorID, actorRole, tracking.StatusAssigned, assignmentMetadata(agentID))
+	event, err := r.trackingRepo.TransitionTx(ctx, tx, orderID, actorID, actorRole, actorRole, tracking.StatusAssigned, assignmentMetadata(agentID))
 	if err != nil {
 		return orders.Order{}, mapTrackingError(err)
 	}
@@ -187,7 +187,7 @@ func (r *PostgresRepository) AutoAssign(ctx context.Context, orderID, actorID st
 			continue
 		}
 
-		event, err := r.trackingRepo.TransitionTx(ctx, tx, orderID, actorID, actorRole, tracking.StatusAssigned, assignmentMetadata(locked.AgentID))
+		event, err := r.trackingRepo.TransitionTx(ctx, tx, orderID, actorID, actorRole, actorRole, tracking.StatusAssigned, assignmentMetadata(locked.AgentID))
 		if err != nil {
 			return orders.Order{}, mapTrackingError(err)
 		}

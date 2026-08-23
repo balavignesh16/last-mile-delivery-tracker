@@ -439,6 +439,91 @@ func TestUpdateMeHandler_CannotMassAssignProtectedFields(t *testing.T) {
 	}
 }
 
+// --- LookupCustomer ---
+
+func TestLookupCustomerHandler_FindsCustomerByEmail(t *testing.T) {
+	repo := newFakeRepo()
+	created, err := repo.Create(context.Background(), users.NewUser{
+		Email: "shopper@example.com", PasswordHash: mustHashForTest(t, "password123"),
+		FullName: "Shopper Sam", Role: users.RoleCustomer,
+	})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+
+	rec := doRequest(t, LookupCustomerHandler(repo), http.MethodGet, "/api/v1/users/lookup?email=shopper@example.com", "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	body := decodeJSON[map[string]any](t, rec)
+	if body["id"] != created.ID {
+		t.Errorf("id = %v, want %v", body["id"], created.ID)
+	}
+	if body["full_name"] != "Shopper Sam" {
+		t.Errorf("full_name = %v, want Shopper Sam", body["full_name"])
+	}
+	if _, present := body["role"]; present {
+		t.Error("response contains role — this endpoint only ever returns customers, no need to echo it")
+	}
+	if _, present := body["password_hash"]; present {
+		t.Error("response contains password_hash — must never be returned")
+	}
+}
+
+func TestLookupCustomerHandler_IsCaseInsensitiveOnEmail(t *testing.T) {
+	repo := newFakeRepo()
+	if _, err := repo.Create(context.Background(), users.NewUser{
+		Email: "mixedcase@example.com", PasswordHash: mustHashForTest(t, "password123"),
+		FullName: "Mixed Case", Role: users.RoleCustomer,
+	}); err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+
+	rec := doRequest(t, LookupCustomerHandler(repo), http.MethodGet, "/api/v1/users/lookup?email=MixedCase@Example.com", "")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+}
+
+func TestLookupCustomerHandler_UnknownEmailReturns404(t *testing.T) {
+	repo := newFakeRepo()
+	rec := doRequest(t, LookupCustomerHandler(repo), http.MethodGet, "/api/v1/users/lookup?email=nobody@example.com", "")
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+}
+
+// A non-customer account (admin/agent) must 404 exactly like an unknown
+// email — this endpoint must never let an admin distinguish "this email
+// isn't registered" from "this email belongs to staff".
+func TestLookupCustomerHandler_NonCustomerAccountReturns404(t *testing.T) {
+	repo := newFakeRepo()
+	if _, err := repo.Create(context.Background(), users.NewUser{
+		Email: "staff@example.com", PasswordHash: mustHashForTest(t, "password123"),
+		FullName: "Staff Member", Role: users.RoleDeliveryAgent,
+	}); err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+
+	rec := doRequest(t, LookupCustomerHandler(repo), http.MethodGet, "/api/v1/users/lookup?email=staff@example.com", "")
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+}
+
+func TestLookupCustomerHandler_MissingEmailReturns422(t *testing.T) {
+	repo := newFakeRepo()
+	rec := doRequest(t, LookupCustomerHandler(repo), http.MethodGet, "/api/v1/users/lookup", "")
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusUnprocessableEntity, rec.Body.String())
+	}
+}
+
 // --- Pure validation helpers ---
 
 func TestValidateRegistration(t *testing.T) {

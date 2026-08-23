@@ -18,5 +18,10 @@ func Mount(usersRepo users.Repository, jwtSecret string) func(chi.Router) {
 
 		v1.With(RequireAuth(jwtSecret)).Get("/users/me", GetMeHandler(usersRepo))
 		v1.With(RequireAuth(jwtSecret)).Put("/users/me", UpdateMeHandler(usersRepo))
+
+		v1.With(
+			RequireAuth(jwtSecret),
+			RequireRole(users.RoleAdmin),
+		).Get("/users/lookup", LookupCustomerHandler(usersRepo))
 	}
 }

@@ -125,9 +125,9 @@ func (r *PostgresRepository) CreateOrder(ctx context.Context, input CreateOrderI
 	}
 
 	const eventStmt = `
-		INSERT INTO order_tracking_events (order_id, previous_status, new_status, actor_id, metadata)
-		VALUES ($1, NULL, $2, $3, NULL)`
-	if _, err := tx.Exec(ctx, eventStmt, o.ID, StatusCreated, input.CreatedBy); err != nil {
+		INSERT INTO order_tracking_events (order_id, previous_status, new_status, actor_id, actor_role, metadata)
+		VALUES ($1, NULL, $2, $3, $4, NULL)`
+	if _, err := tx.Exec(ctx, eventStmt, o.ID, StatusCreated, input.CreatedBy, string(input.CreatedByRole)); err != nil {
 		return Order{}, fmt.Errorf("record initial tracking event: %w", err)
 	}
 

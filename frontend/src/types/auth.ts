@@ -29,3 +29,12 @@ export interface ProfileUpdateInput {
   full_name: string
   phone?: string
 }
+
+// Deliberately narrower than UserProfile — GET /users/lookup only ever
+// returns a customer, and only exists to hand back an id, so it has no
+// role/phone/created_at.
+export interface CustomerLookupResult {
+  id: string
+  email: string
+  full_name: string
+}

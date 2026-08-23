@@ -88,6 +88,14 @@ func TestRescheduleHandler_CustomerOwnFailedOrderSucceeds(t *testing.T) {
 	if repo.lastInput.ActorID != "customer-1" {
 		t.Errorf("actor_id passed to repo = %q, want customer-1 (the real caller, not a body field)", repo.lastInput.ActorID)
 	}
+	// The real caller's role is threaded through for persistence
+	// (actor_role/requested_by_role, migration 0015) even though the
+	// underlying FAILED->RESCHEDULED transition is always internally
+	// authorized as ADMIN regardless — see RescheduleInput's own doc
+	// comment.
+	if repo.lastInput.ActorRole != users.RoleCustomer {
+		t.Errorf("actor_role passed to repo = %q, want CUSTOMER (the real caller's role)", repo.lastInput.ActorRole)
+	}
 }
 
 func TestRescheduleHandler_CustomerAnotherCustomersOrderRejected(t *testing.T) {
@@ -118,6 +126,9 @@ func TestRescheduleHandler_AdminAnyFailedOrderSucceeds(t *testing.T) {
 	}
 	if repo.lastInput.ActorID != "admin-1" {
 		t.Errorf("actor_id passed to repo = %q, want admin-1", repo.lastInput.ActorID)
+	}
+	if repo.lastInput.ActorRole != users.RoleAdmin {
+		t.Errorf("actor_role passed to repo = %q, want ADMIN", repo.lastInput.ActorRole)
 	}
 }
 

@@ -116,6 +116,26 @@ describe('OrderDetailPage', () => {
     expect(screen.getByText('Created', { selector: 'span' })).toBeTruthy()
   })
 
+  it('notes when an order was placed by an admin on the customer\'s behalf', async () => {
+    mockAuth('CUSTOMER')
+    const adminPlacedOrder = { ...order, created_by: 'admin-1' }
+    vi.stubGlobal('fetch', fetchRouter(404, { error: 'order not found' }, events, adminPlacedOrder))
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByText(/By an admin, on your behalf/)).toBeTruthy())
+  })
+
+  it('does not show the placed-by note when the customer placed their own order', async () => {
+    mockAuth('CUSTOMER')
+    vi.stubGlobal('fetch', fetchRouter())
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByText('₹75.00')).toBeTruthy())
+    expect(screen.queryByText(/on your behalf/)).toBeNull()
+  })
+
   it('shows a not-found message for an order that does not exist or is not owned by the caller', async () => {
     mockAuth()
     vi.stubGlobal('fetch', fetchRouter())
@@ -135,7 +155,30 @@ describe('OrderDetailPage', () => {
     // Round 3 admin-dashboard convention), so this reads "Created" not
     // the raw enum value.
     await waitFor(() => expect(screen.getByText('Created', { selector: 'p' })).toBeTruthy())
-    expect(screen.getByText(/Actor: customer-1/)).toBeTruthy()
+    // Round 6 follow-up: actor attribution is now human-readable — the
+    // viewer (mockAuth's default CUSTOMER, id 'customer-1') is this
+    // event's own actor, so it reads "By you" rather than a raw id.
+    expect(screen.getByText(/By you/)).toBeTruthy()
+  })
+
+  it('attributes a tracking event to another role by actor_role, not a raw id', async () => {
+    mockAuth('CUSTOMER')
+    const adminEvent = { ...events[0], id: 'event-2', actor_id: 'admin-1', actor_role: 'ADMIN' }
+    vi.stubGlobal('fetch', fetchRouter(404, { error: 'order not found' }, [adminEvent]))
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByText(/By an admin/)).toBeTruthy())
+  })
+
+  it('attributes a tracking event honestly when actor_role predates migration 0015', async () => {
+    mockAuth('CUSTOMER')
+    const legacyEvent = { ...events[0], id: 'event-2', actor_id: 'agent-1', actor_role: null }
+    vi.stubGlobal('fetch', fetchRouter(404, { error: 'order not found' }, [legacyEvent]))
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByText(/By someone/)).toBeTruthy())
   })
 
   it('shows the empty-timeline state when there are no events', async () => {
@@ -582,10 +625,13 @@ describe('OrderDetailPage', () => {
     await waitFor(() => expect(screen.getByText('No reschedule requests yet.')).toBeTruthy())
   })
 
-  it('renders reschedule history entries', async () => {
+  it('renders reschedule history entries, attributed by requested_by_role', async () => {
+    // mockAuth always uses viewer id 'customer-1' regardless of role, so
+    // a distinct requester id is used here to genuinely exercise the
+    // role-label branch rather than the "you" branch.
     mockAuth('ADMIN')
     const rescheduleRecord = {
-      id: 'reschedule-1', order_id: 'order-1', requested_by: 'customer-1',
+      id: 'reschedule-1', order_id: 'order-1', requested_by: 'some-customer-id', requested_by_role: 'CUSTOMER',
       requested_date: '2099-01-01', reason: 'Not home', created_at: '2026-08-21T12:00:00Z',
     }
     vi.stubGlobal('fetch', fetchRouter(404, { error: 'order not found' }, events, order, [rescheduleRecord]))
@@ -594,7 +640,7 @@ describe('OrderDetailPage', () => {
 
     await waitFor(() => expect(screen.getByText('New date: 2099-01-01')).toBeTruthy())
     expect(screen.getByText('Reason: Not home')).toBeTruthy()
-    expect(screen.getByText(/Requested by: customer-1/)).toBeTruthy()
+    expect(screen.getByText(/Requested by the customer/)).toBeTruthy()
   })
 
   it('shows a reschedule-history error banner on failure', async () => {

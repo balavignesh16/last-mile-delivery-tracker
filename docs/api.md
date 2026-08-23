@@ -123,6 +123,24 @@ Response: same shape as `GET /users/me`, with the updated fields.
 
 **Errors**: `401` (no/invalid token), `422` (empty name, or an unrecognized/protected field present).
 
+### `GET /api/v1/users/lookup?email=...`
+
+**Auth**: ADMIN only. **Purpose**: resolve a customer's email to their user id — an admin creating an order on a customer's behalf (`POST /orders`' `customer_id` field) has no way to already know that id, only the email. An unknown email and an email belonging to a non-customer account both return the same `404`, so this can't be used to check whether an arbitrary email belongs to a staff account.
+
+```bash
+curl "http://localhost:8080/api/v1/users/lookup?email=jane@example.com" -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+```json
+{
+  "id": "8d56f3df-9039-4c98-9aae-cfb8c486dc61",
+  "email": "jane@example.com",
+  "full_name": "Jane Doe"
+}
+```
+
+**Errors**: `401` (no/invalid token), `403` (non-admin), `404` (no such email, or it isn't a CUSTOMER account), `422` (missing `email` query param).
+
 ---
 
 ## Delivery agents (M03)
@@ -527,10 +545,14 @@ curl -X POST http://localhost:8080/api/v1/orders/$ORDER_ID/status \
 {
   "id": "...", "order_id": "...",
   "previous_status": "ASSIGNED", "new_status": "PICKED_UP",
-  "actor_id": "...", "metadata": null,
+  "actor_id": "...", "actor_role": "DELIVERY_AGENT", "metadata": null,
   "created_at": "2026-08-21T13:27:07Z"
 }
 ```
+
+`actor_role` (M13) is the actor's role at the time of the event —
+`null` only for a row written before that column existed, never
+backfilled.
 
 `metadata` is an optional, free-form JSON object, stored verbatim —
 no required shape is enforced.
@@ -668,11 +690,18 @@ curl http://localhost:8080/api/v1/orders/$ORDER_ID/reschedules -H "Authorization
 [
   {
     "id": "...", "order_id": "...", "requested_by": "...",
+    "requested_by_role": "CUSTOMER",
     "requested_date": "2099-01-01", "reason": "Not available",
     "created_at": "2026-08-21T09:21:32Z"
   }
 ]
 ```
+
+`requested_by_role` (M13) is the real caller's role — a `CUSTOMER`
+requesting their own reschedule shows `CUSTOMER` here even though the
+underlying `FAILED`->`RESCHEDULED` transition is always authorized as
+`ADMIN` internally (see the tracking-state-machine note above); `null`
+only for a row written before this column existed.
 
 **Errors**: `401`, `403` (`DELIVERY_AGENT`), `404` (unknown id, or a `CUSTOMER` requesting an order they don't own — same hide-existence convention as `GET /orders/{id}`).
 

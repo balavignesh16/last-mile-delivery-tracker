@@ -75,12 +75,17 @@ var (
 // is nil only for an order's very first event (NULL -> CREATED,
 // written by internal/orders.CreateOrder itself). Metadata is raw,
 // optional JSON — this package enforces no required shape for it.
+// ActorRole is nil only for a row written before migration 0015 added
+// the column — every event recorded since then always has one (see
+// Repository.Transition's own doc comment for why it's a required,
+// not optional, parameter on every write path).
 type Event struct {
 	ID             string
 	OrderID        string
 	PreviousStatus *string
 	NewStatus      string
 	ActorID        string
+	ActorRole      *string
 	Metadata       json.RawMessage
 	CreatedAt      time.Time
 }

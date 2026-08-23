@@ -262,6 +262,62 @@ func UpdateMeHandler(repo users.Repository) http.HandlerFunc {
 	}
 }
 
+// lookupCustomerResponse is deliberately narrower than userResponse — an
+// admin resolving an email to a customer_id for order creation has no
+// legitimate need for phone/created_at, and returning less here keeps
+// this endpoint's shape honest about its one purpose.
+type lookupCustomerResponse struct {
+	ID       string `json:"id"`
+	Email    string `json:"email"`
+	FullName string `json:"full_name"`
+}
+
+// LookupCustomerHandler handles GET /api/v1/users/lookup?email=... —
+// ADMIN only (see routes.go). It exists so an admin creating an order on
+// a customer's behalf (POST /orders' customer_id field) can resolve the
+// only thing they realistically know — the customer's email — into the
+// UUID that endpoint actually requires, instead of needing to already
+// have the id.
+//
+// An email that doesn't exist and an email that exists but isn't a
+// CUSTOMER account both produce the same 404 with the same message —
+// deliberately, same reasoning as LoginHandler's generic 401: this
+// endpoint must not become a way for an admin to probe whether an
+// arbitrary email belongs to a staff account.
+func LookupCustomerHandler(repo users.Repository) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		email := NormalizeEmail(r.URL.Query().Get("email"))
+		if email == "" {
+			server.WriteError(w, http.StatusUnprocessableEntity, "email is required")
+			return
+		}
+
+		const notFoundMessage = "no customer account found with this email"
+
+		user, err := repo.FindByEmail(r.Context(), email)
+		if err != nil {
+			if errors.Is(err, users.ErrNotFound) {
+				server.WriteError(w, http.StatusNotFound, notFoundMessage)
+				return
+			}
+			slog.Error("customer lookup failed", "error", err)
+			server.WriteError(w, http.StatusInternalServerError, "could not look up customer")
+			return
+		}
+
+		if user.Role != users.RoleCustomer {
+			server.WriteError(w, http.StatusNotFound, notFoundMessage)
+			return
+		}
+
+		server.WriteJSON(w, http.StatusOK, lookupCustomerResponse{
+			ID:       user.ID,
+			Email:    user.Email,
+			FullName: user.FullName,
+		})
+	}
+}
+
 func NormalizeEmail(raw string) string {
 	return strings.ToLower(strings.TrimSpace(raw))
 }

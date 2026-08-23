@@ -28,15 +28,17 @@ var (
 	ErrInvalidTransition = errors.New("order is not currently FAILED")
 )
 
-// RescheduleInput is Reschedule's only input. actorID is always the real,
-// authenticated caller's user id (customer or admin) — the repository
-// never receives or asserts a caller role, because by the time it is
-// invoked, the handler has already independently authorized the call
-// (CUSTOMER owns the order, or caller is ADMIN); see Reschedule's own
-// doc comment for what the repository does with that authorization.
+// RescheduleInput is Reschedule's only input. ActorID is always the
+// real, authenticated caller's user id (customer or admin). ActorRole
+// is that same caller's real role — captured only for the persisted
+// record (both order_tracking_events.actor_role and
+// reschedule_requests.requested_by_role); the repository still always
+// authorizes the underlying FAILED->RESCHEDULED edge as ADMIN
+// regardless of ActorRole's value — see Reschedule's own doc comment.
 type RescheduleInput struct {
 	OrderID       string
 	ActorID       string
+	ActorRole     users.Role
 	RequestedDate time.Time
 	Reason        *string
 	// PreviousAgentID is order.AssignedAgentID as read by the handler's
@@ -122,7 +124,7 @@ func (r *PostgresRepository) Reschedule(ctx context.Context, input RescheduleInp
 	}
 
 	metadata := rescheduleMetadata(input.RequestedDate, input.Reason)
-	event, err := r.trackingRepo.TransitionTx(ctx, tx, input.OrderID, input.ActorID, users.RoleAdmin, tracking.StatusRescheduled, metadata)
+	event, err := r.trackingRepo.TransitionTx(ctx, tx, input.OrderID, input.ActorID, users.RoleAdmin, input.ActorRole, tracking.StatusRescheduled, metadata)
 	if err != nil {
 		return orders.Order{}, mapTrackingError(err)
 	}
@@ -151,7 +153,7 @@ func (r *PostgresRepository) Reschedule(ctx context.Context, input RescheduleInp
 
 func (r *PostgresRepository) ListReschedules(ctx context.Context, orderID string) ([]Reschedule, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, order_id, requested_by, requested_date, reason, created_at
+		`SELECT id, order_id, requested_by, requested_by_role, requested_date, reason, created_at
 		 FROM reschedule_requests WHERE order_id = $1 ORDER BY created_at ASC`,
 		orderID,
 	)
@@ -163,7 +165,7 @@ func (r *PostgresRepository) ListReschedules(ctx context.Context, orderID string
 	var out []Reschedule
 	for rows.Next() {
 		var re Reschedule
-		if err := rows.Scan(&re.ID, &re.OrderID, &re.RequestedBy, &re.RequestedDate, &re.Reason, &re.CreatedAt); err != nil {
+		if err := rows.Scan(&re.ID, &re.OrderID, &re.RequestedBy, &re.RequestedByRole, &re.RequestedDate, &re.Reason, &re.CreatedAt); err != nil {
 			return nil, fmt.Errorf("scan reschedule: %w", err)
 		}
 		out = append(out, re)
@@ -204,9 +206,9 @@ func freeAgent(ctx context.Context, tx pgx.Tx, agentID string) error {
 
 func insertRescheduleRequest(ctx context.Context, tx pgx.Tx, input RescheduleInput) error {
 	const stmt = `
-		INSERT INTO reschedule_requests (order_id, requested_by, requested_date, reason)
-		VALUES ($1, $2, $3, $4)`
-	if _, err := tx.Exec(ctx, stmt, input.OrderID, input.ActorID, input.RequestedDate, input.Reason); err != nil {
+		INSERT INTO reschedule_requests (order_id, requested_by, requested_by_role, requested_date, reason)
+		VALUES ($1, $2, $3, $4, $5)`
+	if _, err := tx.Exec(ctx, stmt, input.OrderID, input.ActorID, string(input.ActorRole), input.RequestedDate, input.Reason); err != nil {
 		return fmt.Errorf("insert reschedule request: %w", err)
 	}
 	return nil

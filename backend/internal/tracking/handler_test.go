@@ -285,7 +285,7 @@ func TestTransitionHandler_ServerDerivedFieldsRejected(t *testing.T) {
 func TestGetTrackingHandler_OwnerCustomerSeesTimeline(t *testing.T) {
 	repo := newFakeRepo()
 	repo.seedOrder("order-1", "customer-1", StatusCreated)
-	if _, err := repo.Transition(context.Background(), "order-1", "admin-1", users.RoleAdmin, StatusAssigned, nil); err != nil {
+	if _, err := repo.Transition(context.Background(), "order-1", "admin-1", users.RoleAdmin, users.RoleAdmin, StatusAssigned, nil); err != nil {
 		t.Fatalf("seed transition failed: %v", err)
 	}
 
@@ -342,7 +342,7 @@ func TestGetTrackingHandler_ChronologicalOrderPreserved(t *testing.T) {
 	ctx := context.Background()
 	transitions := []Status{StatusAssigned, StatusPickedUp, StatusInTransit}
 	for _, s := range transitions {
-		if _, err := repo.Transition(ctx, "order-1", "admin-1", users.RoleAdmin, s, nil); err != nil {
+		if _, err := repo.Transition(ctx, "order-1", "admin-1", users.RoleAdmin, users.RoleAdmin, s, nil); err != nil {
 			t.Fatalf("seed transition to %s failed: %v", s, err)
 		}
 	}

@@ -35,6 +35,7 @@ type eventResponse struct {
 	PreviousStatus *string         `json:"previous_status"`
 	NewStatus      string          `json:"new_status"`
 	ActorID        string          `json:"actor_id"`
+	ActorRole      *string         `json:"actor_role"`
 	Metadata       json.RawMessage `json:"metadata"`
 	CreatedAt      string          `json:"created_at"`
 }
@@ -46,6 +47,7 @@ func toEventResponse(e Event) eventResponse {
 		PreviousStatus: e.PreviousStatus,
 		NewStatus:      e.NewStatus,
 		ActorID:        e.ActorID,
+		ActorRole:      e.ActorRole,
 		Metadata:       e.Metadata,
 		CreatedAt:      e.CreatedAt.Format(timeLayout),
 	}
@@ -88,7 +90,7 @@ func TransitionHandler(repo Repository, onTransition TransitionHook) http.Handle
 			return
 		}
 
-		event, err := repo.Transition(r.Context(), orderID, identity.UserID, identity.Role, newStatus, req.Metadata)
+		event, err := repo.Transition(r.Context(), orderID, identity.UserID, identity.Role, identity.Role, newStatus, req.Metadata)
 		if err != nil {
 			switch {
 			case errors.Is(err, ErrOrderNotFound):

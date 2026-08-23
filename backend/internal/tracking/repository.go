@@ -23,7 +23,18 @@ type Repository interface {
 	// insert the resulting tracking event — all inside one transaction.
 	// Returns ErrOrderNotFound, ErrInvalidTransition, or
 	// ErrForbiddenTransition on failure.
-	Transition(ctx context.Context, orderID, actorID string, role users.Role, newStatus Status, metadata json.RawMessage) (Event, error)
+	//
+	// role and actorRole are deliberately separate parameters. role is
+	// used only for IsRoleAuthorized's edge check — unchanged behavior.
+	// actorRole is what gets persisted as the event's actor_role, for
+	// the frontend to display ("updated by an admin/agent/customer").
+	// The two are equal at every call site except
+	// rescheduling.Repository.Reschedule, which always authorizes as
+	// ADMIN (a CUSTOMER-initiated reschedule is legal under M10's own,
+	// separate authorization gate, not M08's matrix) while still
+	// recording the real caller's own role — see that method's doc
+	// comment for the full reasoning.
+	Transition(ctx context.Context, orderID, actorID string, role, actorRole users.Role, newStatus Status, metadata json.RawMessage) (Event, error)
 	// TransitionTx is Transition's exact same validated/authorized write
 	// — lock, check edge legality, check role, update orders.status,
 	// insert the tracking event — performed on a transaction the caller
@@ -37,8 +48,9 @@ type Repository interface {
 	// authorization matrix, zero behavior change to the existing
 	// endpoint (verified by M08's full test suite passing unchanged).
 	// The caller is responsible for beginning and committing/rolling
-	// back tx; this method never does either.
-	TransitionTx(ctx context.Context, tx pgx.Tx, orderID, actorID string, role users.Role, newStatus Status, metadata json.RawMessage) (Event, error)
+	// back tx; this method never does either. See Transition's own doc
+	// comment for why role and actorRole are separate parameters.
+	TransitionTx(ctx context.Context, tx pgx.Tx, orderID, actorID string, role, actorRole users.Role, newStatus Status, metadata json.RawMessage) (Event, error)
 	// OrderCustomerID returns the customer_id of the named order, for
 	// the ownership check GetTrackingHandler needs before it may show a
 	// CUSTOMER caller an order's timeline. Returns ErrOrderNotFound if
@@ -58,7 +70,7 @@ func NewPostgresRepository(pool *pgxpool.Pool) *PostgresRepository {
 	return &PostgresRepository{pool: pool}
 }
 
-const eventColumns = `id, order_id, previous_status, new_status, actor_id, metadata, created_at`
+const eventColumns = `id, order_id, previous_status, new_status, actor_id, actor_role, metadata, created_at`
 
 // Transition is the one place this module ever writes. The SELECT ...
 // FOR UPDATE lock on the parent order is what actually prevents two
@@ -73,14 +85,14 @@ const eventColumns = `id, order_id, previous_status, new_status, actor_id, metad
 // its own validation runs against reality rather than a stale read.
 // This is the exact mechanism (and exact reasoning) M05's
 // lockRateCard uses for concurrent slab writes.
-func (r *PostgresRepository) Transition(ctx context.Context, orderID, actorID string, role users.Role, newStatus Status, metadata json.RawMessage) (Event, error) {
+func (r *PostgresRepository) Transition(ctx context.Context, orderID, actorID string, role, actorRole users.Role, newStatus Status, metadata json.RawMessage) (Event, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return Event{}, fmt.Errorf("begin transition transaction: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
 
-	event, err := r.TransitionTx(ctx, tx, orderID, actorID, role, newStatus, metadata)
+	event, err := r.TransitionTx(ctx, tx, orderID, actorID, role, actorRole, newStatus, metadata)
 	if err != nil {
 		return Event{}, err
 	}
@@ -94,7 +106,7 @@ func (r *PostgresRepository) Transition(ctx context.Context, orderID, actorID st
 // TransitionTx is the actual validated write — see the Repository
 // interface doc for why this exists as a caller-transaction-scoped
 // method separate from Transition.
-func (r *PostgresRepository) TransitionTx(ctx context.Context, tx pgx.Tx, orderID, actorID string, role users.Role, newStatus Status, metadata json.RawMessage) (Event, error) {
+func (r *PostgresRepository) TransitionTx(ctx context.Context, tx pgx.Tx, orderID, actorID string, role, actorRole users.Role, newStatus Status, metadata json.RawMessage) (Event, error) {
 	var currentStatus string
 	err := tx.QueryRow(ctx, `SELECT status FROM orders WHERE id = $1 FOR UPDATE`, orderID).Scan(&currentStatus)
 	if err != nil {
@@ -123,10 +135,10 @@ func (r *PostgresRepository) TransitionTx(ctx context.Context, tx pgx.Tx, orderI
 	}
 
 	const stmt = `
-		INSERT INTO order_tracking_events (order_id, previous_status, new_status, actor_id, metadata)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO order_tracking_events (order_id, previous_status, new_status, actor_id, actor_role, metadata)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		RETURNING ` + eventColumns
-	event, err := scanEvent(tx.QueryRow(ctx, stmt, orderID, prevStatus, string(newStatus), actorID, metadataParam))
+	event, err := scanEvent(tx.QueryRow(ctx, stmt, orderID, prevStatus, string(newStatus), actorID, string(actorRole), metadataParam))
 	if err != nil {
 		return Event{}, fmt.Errorf("record tracking event: %w", err)
 	}
@@ -178,7 +190,7 @@ type rowScanner interface {
 func scanEvent(row rowScanner) (Event, error) {
 	var e Event
 	var metadata []byte
-	err := row.Scan(&e.ID, &e.OrderID, &e.PreviousStatus, &e.NewStatus, &e.ActorID, &metadata, &e.CreatedAt)
+	err := row.Scan(&e.ID, &e.OrderID, &e.PreviousStatus, &e.NewStatus, &e.ActorID, &e.ActorRole, &metadata, &e.CreatedAt)
 	if err != nil {
 		return Event{}, err
 	}

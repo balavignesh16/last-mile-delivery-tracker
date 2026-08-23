@@ -228,9 +228,10 @@ func CreateOrderHandler(ordersRepo Repository, usersRepo users.Repository, zones
 		}
 
 		created, err := ordersRepo.CreateOrder(r.Context(), CreateOrderInput{
-			CustomerID: customerID,
-			CreatedBy:  identity.UserID,
-			Quote:      quote,
+			CustomerID:    customerID,
+			CreatedBy:     identity.UserID,
+			CreatedByRole: identity.Role,
+			Quote:         quote,
 		})
 		if err != nil {
 			slog.Error("order creation failed", "error", err)

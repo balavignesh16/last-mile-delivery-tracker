@@ -33,22 +33,24 @@ type rescheduleRequest struct {
 // a timestamp, and reformatting it as one would silently invent a
 // time-of-day this package never captured.
 type rescheduleResponse struct {
-	ID            string  `json:"id"`
-	OrderID       string  `json:"order_id"`
-	RequestedBy   string  `json:"requested_by"`
-	RequestedDate string  `json:"requested_date"`
-	Reason        *string `json:"reason"`
-	CreatedAt     string  `json:"created_at"`
+	ID              string  `json:"id"`
+	OrderID         string  `json:"order_id"`
+	RequestedBy     string  `json:"requested_by"`
+	RequestedByRole *string `json:"requested_by_role"`
+	RequestedDate   string  `json:"requested_date"`
+	Reason          *string `json:"reason"`
+	CreatedAt       string  `json:"created_at"`
 }
 
 func toRescheduleResponse(re Reschedule) rescheduleResponse {
 	return rescheduleResponse{
-		ID:            re.ID,
-		OrderID:       re.OrderID,
-		RequestedBy:   re.RequestedBy,
-		RequestedDate: re.RequestedDate.Format(dateLayout),
-		Reason:        re.Reason,
-		CreatedAt:     re.CreatedAt.Format(timeLayout),
+		ID:              re.ID,
+		OrderID:         re.OrderID,
+		RequestedBy:     re.RequestedBy,
+		RequestedByRole: re.RequestedByRole,
+		RequestedDate:   re.RequestedDate.Format(dateLayout),
+		Reason:          re.Reason,
+		CreatedAt:       re.CreatedAt.Format(timeLayout),
 	}
 }
 
@@ -120,6 +122,7 @@ func RescheduleHandler(repo Repository, ordersRepo orders.Repository) http.Handl
 		updated, err := repo.Reschedule(r.Context(), RescheduleInput{
 			OrderID:         orderID,
 			ActorID:         identity.UserID,
+			ActorRole:       identity.Role,
 			RequestedDate:   requestedDate,
 			Reason:          req.Reason,
 			PreviousAgentID: order.AssignedAgentID,

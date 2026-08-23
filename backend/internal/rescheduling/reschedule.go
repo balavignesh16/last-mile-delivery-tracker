@@ -87,10 +87,15 @@ func ValidateRescheduleDate(requestedDate, today time.Time) error {
 // is immediately effective once created, per the finalized M10 decision
 // that there is no approval workflow.
 type Reschedule struct {
-	ID            string
-	OrderID       string
-	RequestedBy   string
-	RequestedDate time.Time
-	Reason        *string
-	CreatedAt     time.Time
+	ID          string
+	OrderID     string
+	RequestedBy string
+	// RequestedByRole is nil only for a row written before migration
+	// 0015 added the column — every request recorded since then always
+	// has one (the real caller's role, captured by RescheduleHandler
+	// from their own verified JWT — see RescheduleInput.ActorRole).
+	RequestedByRole *string
+	RequestedDate   time.Time
+	Reason          *string
+	CreatedAt       time.Time
 }

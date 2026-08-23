@@ -202,10 +202,10 @@ func (f *fakeTrackingRepo) seedEvent(orderID string, e tracking.Event) {
 	f.events[orderID] = append(f.events[orderID], e)
 }
 
-func (f *fakeTrackingRepo) Transition(_ context.Context, _, _ string, _ users.Role, _ tracking.Status, _ json.RawMessage) (tracking.Event, error) {
+func (f *fakeTrackingRepo) Transition(_ context.Context, _, _ string, _, _ users.Role, _ tracking.Status, _ json.RawMessage) (tracking.Event, error) {
 	return tracking.Event{}, errors.New("not implemented in fake")
 }
-func (f *fakeTrackingRepo) TransitionTx(_ context.Context, _ pgx.Tx, _, _ string, _ users.Role, _ tracking.Status, _ json.RawMessage) (tracking.Event, error) {
+func (f *fakeTrackingRepo) TransitionTx(_ context.Context, _ pgx.Tx, _, _ string, _, _ users.Role, _ tracking.Status, _ json.RawMessage) (tracking.Event, error) {
 	return tracking.Event{}, errors.New("not implemented in fake")
 }
 func (f *fakeTrackingRepo) OrderCustomerID(_ context.Context, _ string) (string, error) {

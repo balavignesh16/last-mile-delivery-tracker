@@ -107,9 +107,10 @@ func (f *fakeReschedulingRepo) Reschedule(_ context.Context, input RescheduleInp
 	f.orders[input.OrderID] = o
 
 	f.nextID++
+	actorRole := string(input.ActorRole)
 	f.reschedules[input.OrderID] = append(f.reschedules[input.OrderID], Reschedule{
 		ID: fmt.Sprintf("fake-reschedule-%d", f.nextID), OrderID: input.OrderID,
-		RequestedBy: input.ActorID, RequestedDate: input.RequestedDate,
+		RequestedBy: input.ActorID, RequestedByRole: &actorRole, RequestedDate: input.RequestedDate,
 		Reason: input.Reason, CreatedAt: time.Now(),
 	})
 	return o, nil

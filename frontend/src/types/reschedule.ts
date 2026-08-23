@@ -1,3 +1,5 @@
+import type { Role } from './auth'
+
 // Mirrors backend's rescheduling.Reschedule exactly
 // (internal/rescheduling/reschedule.go) via its own response shape
 // (internal/rescheduling/handler.go's rescheduleResponse). No status
@@ -7,6 +9,10 @@ export interface Reschedule {
   id: string
   order_id: string
   requested_by: string
+  // null only for a row written before this column existed (migration
+  // 0015) — never backfilled, since there's no way to know a
+  // historical requester's role after the fact.
+  requested_by_role: Role | null
   requested_date: string
   reason: string | null
   created_at: string
