@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AuthContextValue } from '../../contexts/auth-context'
@@ -60,7 +60,7 @@ describe('RatesPage', () => {
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getByText('No rate cards yet.')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('No rate cards yet')).toBeTruthy())
   })
 
   it('loads and displays the rate card list', async () => {
@@ -114,13 +114,19 @@ describe('RatesPage', () => {
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getByText('No rate cards yet.')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('No rate cards yet')).toBeTruthy())
 
-    fireEvent.click(screen.getByLabelText('Order type'))
+    // Round 6: creation moved into a modal, and the toolbar's own
+    // "Order type"/"Zone relationship" filter selects are always
+    // visible (even with an empty list), so the modal's matching
+    // fields are scoped to the dialog to disambiguate.
+    fireEvent.click(screen.getByRole('button', { name: 'Create rate card' }))
+    const dialog = screen.getByRole('dialog')
+    fireEvent.click(within(dialog).getByLabelText('Order type'))
     fireEvent.click(screen.getByRole('option', { name: 'B2C' }))
-    fireEvent.click(screen.getByLabelText('Zone relationship'))
+    fireEvent.click(within(dialog).getByLabelText('Zone relationship'))
     fireEvent.click(screen.getByRole('option', { name: 'INTER' }))
-    fireEvent.click(screen.getByRole('button', { name: /create rate card/i }))
+    fireEvent.click(within(dialog).getByRole('button', { name: /create rate card/i }))
 
     await waitFor(() => expect(screen.getByText(/B2C · INTER/)).toBeTruthy())
   })
@@ -142,8 +148,9 @@ describe('RatesPage', () => {
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getByText('No rate cards yet.')).toBeTruthy())
-    fireEvent.click(screen.getByRole('button', { name: /create rate card/i }))
+    await waitFor(() => expect(screen.getByText('No rate cards yet')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Create rate card' }))
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /create rate card/i }))
 
     await waitFor(() => expect(screen.getByText('could not create rate card')).toBeTruthy())
   })

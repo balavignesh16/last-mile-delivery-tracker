@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AuthContextValue } from '../../contexts/auth-context'
@@ -61,6 +61,15 @@ const assignedOrder = {
   created_at: '2026-01-02T00:00:00Z',
 }
 
+// Round 6: the resource table renders both a desktop <table> and a
+// CSS-only ("sm:hidden"/"hidden sm:block") mobile card list for the
+// same rows — real browsers show only one via the media query, but
+// jsdom has no viewport, so both stay in the DOM during a test. Row
+// selection here is scoped to the <table> to get a single, real match.
+function clickAgentRow(name: string) {
+  fireEvent.click(within(screen.getByRole('table')).getByText(name))
+}
+
 function detailFetchRouter() {
   return vi.fn((input: RequestInfo | URL) => {
     const url = String(input)
@@ -87,8 +96,8 @@ describe('AgentsPage', () => {
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getByText('Detail Agent')).toBeTruthy())
-    fireEvent.click(screen.getByText('Detail Agent'))
+    await waitFor(() => expect(screen.getByRole('table')).toBeTruthy())
+    clickAgentRow('Detail Agent')
 
     await waitFor(() => expect(screen.getByText('North Zone')).toBeTruthy())
     // "detail@example.com" appears both in the list row and the detail
@@ -110,8 +119,8 @@ describe('AgentsPage', () => {
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getByText('Detail Agent')).toBeTruthy())
-    fireEvent.click(screen.getByText('Detail Agent'))
+    await waitFor(() => expect(screen.getByRole('table')).toBeTruthy())
+    clickAgentRow('Detail Agent')
 
     await waitFor(() => expect(screen.getByRole('button', { name: 'Deactivate' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Deactivate' }))
@@ -139,8 +148,8 @@ describe('AgentsPage', () => {
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getByText('Detail Agent')).toBeTruthy())
-    fireEvent.click(screen.getByText('Detail Agent'))
+    await waitFor(() => expect(screen.getByRole('table')).toBeTruthy())
+    clickAgentRow('Detail Agent')
 
     await waitFor(() => expect(screen.getByText('No orders currently or most-recently assigned to this agent.')).toBeTruthy())
   })
@@ -176,8 +185,10 @@ describe('AgentsPage', () => {
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getByText('Existing Agent')).toBeTruthy())
-    expect(screen.getByText('existing@example.com')).toBeTruthy()
+    await waitFor(() => expect(screen.getByRole('table')).toBeTruthy())
+    const table = screen.getByRole('table')
+    expect(within(table).getByText('Existing Agent')).toBeTruthy()
+    expect(within(table).getByText('existing@example.com')).toBeTruthy()
   })
 
   it('search filters the agent list by name or email, client-side', async () => {
@@ -200,13 +211,14 @@ describe('AgentsPage', () => {
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getByText('Alice Agent')).toBeTruthy())
-    expect(screen.getByText('Bob Agent')).toBeTruthy()
+    await waitFor(() => expect(screen.getByRole('table')).toBeTruthy())
+    expect(within(screen.getByRole('table')).getByText('Alice Agent')).toBeTruthy()
+    expect(within(screen.getByRole('table')).getByText('Bob Agent')).toBeTruthy()
 
     fireEvent.change(screen.getByLabelText('Search agents'), { target: { value: 'alice' } })
 
     await waitFor(() => expect(screen.queryByText('Bob Agent')).toBeNull())
-    expect(screen.getByText('Alice Agent')).toBeTruthy()
+    expect(within(screen.getByRole('table')).getByText('Alice Agent')).toBeTruthy()
   })
 
   it('creates an agent and adds it to the list', async () => {
@@ -239,14 +251,22 @@ describe('AgentsPage', () => {
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getByText('No agents yet.')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('No delivery agents yet')).toBeTruthy())
 
-    fireEvent.change(screen.getByLabelText('Full name'), { target: { value: 'New Agent' } })
-    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'new@example.com' } })
-    fireEvent.change(screen.getByLabelText('Temporary password'), { target: { value: 'password123' } })
-    fireEvent.click(screen.getByRole('button', { name: /create agent/i }))
+    // Round 6: creation moved into a modal — the page's own trigger
+    // button is unambiguous before the modal opens (the submit button
+    // with the same "Create agent" text doesn't exist yet), so it's
+    // opened first, then the form fields/submit are scoped to the
+    // dialog to disambiguate from the still-present trigger button.
+    fireEvent.click(screen.getByRole('button', { name: 'Create agent' }))
+    const dialog = screen.getByRole('dialog')
 
-    await waitFor(() => expect(screen.getByText('New Agent')).toBeTruthy())
+    fireEvent.change(within(dialog).getByLabelText('Full name'), { target: { value: 'New Agent' } })
+    fireEvent.change(within(dialog).getByLabelText('Email'), { target: { value: 'new@example.com' } })
+    fireEvent.change(within(dialog).getByLabelText('Temporary password'), { target: { value: 'password123' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: /create agent/i }))
+
+    await waitFor(() => expect(within(screen.getByRole('table')).getByText('New Agent')).toBeTruthy())
   })
 
   it('shows the backend error when creation fails', async () => {
@@ -265,12 +285,15 @@ describe('AgentsPage', () => {
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getByText('No agents yet.')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('No delivery agents yet')).toBeTruthy())
 
-    fireEvent.change(screen.getByLabelText('Full name'), { target: { value: 'Dup Agent' } })
-    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'dup@example.com' } })
-    fireEvent.change(screen.getByLabelText('Temporary password'), { target: { value: 'password123' } })
-    fireEvent.click(screen.getByRole('button', { name: /create agent/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create agent' }))
+    const dialog = screen.getByRole('dialog')
+
+    fireEvent.change(within(dialog).getByLabelText('Full name'), { target: { value: 'Dup Agent' } })
+    fireEvent.change(within(dialog).getByLabelText('Email'), { target: { value: 'dup@example.com' } })
+    fireEvent.change(within(dialog).getByLabelText('Temporary password'), { target: { value: 'password123' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: /create agent/i }))
 
     await waitFor(() => expect(screen.getByText('an account with this email already exists')).toBeTruthy())
   })

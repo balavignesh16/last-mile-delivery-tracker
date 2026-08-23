@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AuthContextValue } from '../../contexts/auth-context'
@@ -34,6 +34,15 @@ function mockAdminAuth() {
 
 const existingZone = { id: 'z1', name: 'North Zone', active: true, created_at: '2026-01-01T00:00:00Z' }
 
+// Round 6: the resource table renders both a desktop <table> and a
+// CSS-only ("sm:hidden"/"hidden sm:block") mobile card list for the
+// same rows — real browsers show only one via the media query, but
+// jsdom has no viewport, so both stay in the DOM during a test. Row
+// selection here is scoped to the <table> to get a single, real match.
+function clickZoneRow(name: string) {
+  fireEvent.click(within(screen.getByRole('table')).getByText(name))
+}
+
 describe('ZonesPage', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -49,7 +58,7 @@ describe('ZonesPage', () => {
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getByText('No zones yet.')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('No zones yet')).toBeTruthy())
   })
 
   it('loads and displays the zone list', async () => {
@@ -62,7 +71,8 @@ describe('ZonesPage', () => {
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getByText('North Zone')).toBeTruthy())
+    await waitFor(() => expect(screen.getByRole('table')).toBeTruthy())
+    expect(within(screen.getByRole('table')).getByText('North Zone')).toBeTruthy()
     expect(screen.getAllByText('Active').length).toBeGreaterThan(0)
   })
 
@@ -96,12 +106,18 @@ describe('ZonesPage', () => {
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getByText('No zones yet.')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('No zones yet')).toBeTruthy())
 
-    fireEvent.change(screen.getByLabelText('Zone name'), { target: { value: 'New Zone' } })
-    fireEvent.click(screen.getByRole('button', { name: /create zone/i }))
+    // Round 6: creation moved into a modal — the trigger button is
+    // unambiguous before the modal opens, then the form/submit are
+    // scoped to the dialog to disambiguate from the still-present
+    // trigger button (both read "Create zone").
+    fireEvent.click(screen.getByRole('button', { name: 'Create zone' }))
+    const dialog = screen.getByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText('Zone name'), { target: { value: 'New Zone' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: /create zone/i }))
 
-    await waitFor(() => expect(screen.getByText('New Zone')).toBeTruthy())
+    await waitFor(() => expect(within(screen.getByRole('table')).getByText('New Zone')).toBeTruthy())
   })
 
   it('shows the backend error when zone creation fails', async () => {
@@ -121,10 +137,12 @@ describe('ZonesPage', () => {
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getByText('No zones yet.')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('No zones yet')).toBeTruthy())
 
-    fireEvent.change(screen.getByLabelText('Zone name'), { target: { value: 'Dup' } })
-    fireEvent.click(screen.getByRole('button', { name: /create zone/i }))
+    fireEvent.click(screen.getByRole('button', { name: 'Create zone' }))
+    const dialog = screen.getByRole('dialog')
+    fireEvent.change(within(dialog).getByLabelText('Zone name'), { target: { value: 'Dup' } })
+    fireEvent.click(within(dialog).getByRole('button', { name: /create zone/i }))
 
     await waitFor(() => expect(screen.getByText('a zone with this name already exists')).toBeTruthy())
   })
@@ -147,8 +165,8 @@ describe('ZonesPage', () => {
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getByText('North Zone')).toBeTruthy())
-    fireEvent.click(screen.getByText('North Zone'))
+    await waitFor(() => expect(screen.getByRole('table')).toBeTruthy())
+    clickZoneRow('North Zone')
 
     await waitFor(() => expect(screen.getByText('Downtown')).toBeTruthy())
   })
@@ -169,8 +187,8 @@ describe('ZonesPage', () => {
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getByText('North Zone')).toBeTruthy())
-    fireEvent.click(screen.getByText('North Zone'))
+    await waitFor(() => expect(screen.getByRole('table')).toBeTruthy())
+    clickZoneRow('North Zone')
 
     await waitFor(() => expect(screen.getByText('No areas in this zone yet.')).toBeTruthy())
   })
@@ -194,8 +212,8 @@ describe('ZonesPage', () => {
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getByText('North Zone')).toBeTruthy())
-    fireEvent.click(screen.getByText('North Zone'))
+    await waitFor(() => expect(screen.getByRole('table')).toBeTruthy())
+    clickZoneRow('North Zone')
     await waitFor(() => expect(screen.getByText('No areas in this zone yet.')).toBeTruthy())
 
     fireEvent.change(screen.getByLabelText('New area name'), { target: { value: 'Suburb' } })
@@ -223,8 +241,8 @@ describe('ZonesPage', () => {
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getByText('North Zone')).toBeTruthy())
-    fireEvent.click(screen.getByText('North Zone'))
+    await waitFor(() => expect(screen.getByRole('table')).toBeTruthy())
+    clickZoneRow('North Zone')
     await waitFor(() => expect(screen.getByRole('button', { name: /deactivate/i })).toBeTruthy())
 
     fireEvent.click(screen.getByRole('button', { name: /deactivate/i }))
@@ -252,8 +270,8 @@ describe('ZonesPage', () => {
       </MemoryRouter>,
     )
 
-    await waitFor(() => expect(screen.getByText('North Zone')).toBeTruthy())
-    fireEvent.click(screen.getByText('North Zone'))
+    await waitFor(() => expect(screen.getByRole('table')).toBeTruthy())
+    clickZoneRow('North Zone')
     await waitFor(() => expect(screen.getByText('Downtown')).toBeTruthy())
 
     // Two "Deactivate" buttons exist once an area is shown: the zone's

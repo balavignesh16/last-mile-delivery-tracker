@@ -5,6 +5,7 @@ import { ErrorBanner } from '../components/ErrorBanner'
 import { Layout } from '../components/Layout'
 import { STATUS_LABEL } from '../components/order-status'
 import { OrderStatusBadge } from '../components/OrderStatusBadge'
+import { Pagination } from '../components/Pagination'
 import { Select } from '../components/Select'
 import { useAuth } from '../hooks/useAuth'
 import { listAgents } from '../services/agents'
@@ -17,6 +18,10 @@ import type { Zone } from '../types/zone'
 import { formatCurrency } from '../utils/currency'
 
 type SortKey = 'order' | 'amount' | 'status' | 'placed'
+
+// Rows shown per page — beyond this, older/less-relevant orders paginate
+// out of view instead of piling into one long, ever-growing list.
+const PAGE_SIZE = 20
 
 // Client-side only — sorts/searches whatever the server already
 // returned for this caller (their own orders, or, for an ADMIN, the
@@ -108,6 +113,7 @@ export function OrdersPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [sortKey, setSortKey] = useState<SortKey | null>(null)
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const [page, setPage] = useState(1)
 
   useEffect(() => {
     if (!token || !isAdmin) return
@@ -176,6 +182,23 @@ export function OrdersPage() {
     }
     return sortKey ? sortOrders(list, sortKey, sortDir) : list
   }, [orders, searchQuery, sortKey, sortDir])
+
+  // A new search/filter can change how many pages exist — always land
+  // back on page 1 rather than risk stranding the viewer on a now-empty
+  // page 3. Adjusted during render (React's documented pattern for
+  // resetting state when an input changes) rather than in an effect, so
+  // it takes effect in the same render instead of causing an extra one.
+  const filterKey = `${searchQuery}|${statusFilter}|${zoneFilter}|${agentFilter}`
+  const [prevFilterKey, setPrevFilterKey] = useState(filterKey)
+  if (filterKey !== prevFilterKey) {
+    setPrevFilterKey(filterKey)
+    setPage(1)
+  }
+
+  const pagedOrders = useMemo(
+    () => displayedOrders.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE),
+    [displayedOrders, page],
+  )
 
   function handleSort(key: SortKey) {
     if (sortKey === key) {
@@ -300,9 +323,9 @@ export function OrdersPage() {
             <p className="mt-1 text-sm text-slate-500">Try a different order ID, type, route, or status.</p>
           </div>
         ) : (
-          <div className="max-h-[32rem] overflow-auto">
+          <>
             <table className="w-full text-left text-sm">
-              <thead className="sticky top-0 z-[1] border-b border-navy-100 bg-navy-50/95 text-xs font-medium tracking-wide text-navy-700 uppercase backdrop-blur-sm">
+              <thead className="border-b border-navy-100 bg-navy-50/95 text-xs font-medium tracking-wide text-navy-700 uppercase">
                 <tr>
                   <SortableHeader sortKey="order" label="Order" activeKey={sortKey} dir={sortDir} onSort={handleSort} />
                   <th className="px-6 py-3">Route</th>
@@ -313,7 +336,7 @@ export function OrdersPage() {
                 </tr>
               </thead>
               <tbody>
-                {displayedOrders.map((o) => (
+                {pagedOrders.map((o) => (
                   <tr
                     key={o.id}
                     onClick={() => navigate(`/orders/${o.id}`)}
@@ -335,7 +358,8 @@ export function OrdersPage() {
                 ))}
               </tbody>
             </table>
-          </div>
+            <Pagination page={page} totalItems={displayedOrders.length} pageSize={PAGE_SIZE} onPageChange={setPage} />
+          </>
         )}
       </div>
     </Layout>

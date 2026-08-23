@@ -1,17 +1,29 @@
-import { MapPin } from 'lucide-react'
-import { useEffect, useState, type FormEvent } from 'react'
+import { ChevronRight, MapPin, Plus, Search } from 'lucide-react'
+import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { EmptyState } from '../../components/EmptyState'
 import { ErrorBanner } from '../../components/ErrorBanner'
 import { Layout } from '../../components/Layout'
+import { Modal } from '../../components/Modal'
+import { PageHeader } from '../../components/PageHeader'
+import { Pagination } from '../../components/Pagination'
+import { Select } from '../../components/Select'
 import { StatusBadge } from '../../components/StatusBadge'
 import { useAuth } from '../../hooks/useAuth'
 import { ApiError } from '../../services/api'
 import { createArea, createZone, listAreas, listZones, updateArea, updateZone } from '../../services/zones'
 import type { Area, Zone } from '../../types/zone'
 
-// Minimal admin zone/area management, per M04's explicit scope: create
-// and rename zones and areas, and toggle a zone's active state. No maps,
-// no geofencing, no bulk import — those are out of scope by design (see
-// docs/zone-management.md).
+// Rows shown per page — beyond this, zones paginate out of view
+// instead of piling into one long, ever-growing list.
+const PAGE_SIZE = 20
+
+// Admin zone/area management (Round 6): a full-width zone workspace —
+// search/status toolbar, dense table, and a full-width area-management
+// workspace that replaces the table (not a permanently-reserved empty
+// side panel) once a zone is selected. Creation moved from a
+// page-dominating form into a modal. Scope is otherwise unchanged from
+// M04: create/rename zones and areas, toggle active state — no maps, no
+// geofencing, no bulk import (see docs/zone-management.md).
 export function ZonesPage() {
   const { token } = useAuth()
 
@@ -19,6 +31,17 @@ export function ZonesPage() {
   const [zonesLoading, setZonesLoading] = useState(true)
   const [zonesError, setZonesError] = useState<string | null>(null)
 
+  // Real area counts, derived from the same GET /zones/:id/areas
+  // endpoint the detail view already calls — fetched once per zone
+  // after the zone list loads, not fabricated. A zone whose count
+  // couldn't be loaded just shows no count rather than a wrong one.
+  const [areaCounts, setAreaCounts] = useState<Record<string, number>>({})
+
+  const [zoneSearch, setZoneSearch] = useState('')
+  const [statusFilter, setStatusFilter] = useState('')
+  const [page, setPage] = useState(1)
+
+  const [createOpen, setCreateOpen] = useState(false)
   const [newZoneName, setNewZoneName] = useState('')
   const [zoneCreateError, setZoneCreateError] = useState<string | null>(null)
   const [creatingZone, setCreatingZone] = useState(false)
@@ -42,6 +65,31 @@ export function ZonesPage() {
 
   const selectedZone = zones.find((z) => z.id === selectedZoneId) ?? null
 
+  const displayedZones = useMemo(() => {
+    const q = zoneSearch.trim().toLowerCase()
+    return zones.filter((z) => {
+      if (q && !z.name.toLowerCase().includes(q)) return false
+      if (statusFilter === 'active' && !z.active) return false
+      if (statusFilter === 'inactive' && z.active) return false
+      return true
+    })
+  }, [zones, zoneSearch, statusFilter])
+
+  const hasActiveFilter = zoneSearch.trim() !== '' || statusFilter !== ''
+
+  // A new search/filter can change how many pages exist — always land
+  // back on page 1 rather than risk stranding the viewer on a now-empty
+  // later page. Adjusted during render (React's documented pattern for
+  // resetting state when an input changes) rather than in an effect.
+  const filterKey = `${zoneSearch}|${statusFilter}`
+  const [prevFilterKey, setPrevFilterKey] = useState(filterKey)
+  if (filterKey !== prevFilterKey) {
+    setPrevFilterKey(filterKey)
+    setPage(1)
+  }
+
+  const pagedZones = useMemo(() => displayedZones.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE), [displayedZones, page])
+
   useEffect(() => {
     if (!token) return
     let cancelled = false
@@ -59,6 +107,22 @@ export function ZonesPage() {
       cancelled = true
     }
   }, [token])
+
+  useEffect(() => {
+    if (!token || zones.length === 0) return
+    let cancelled = false
+    Promise.allSettled(zones.map((z) => listAreas(token, z.id).then((list) => [z.id, list.length] as const))).then((results) => {
+      if (cancelled) return
+      const counts: Record<string, number> = {}
+      for (const result of results) {
+        if (result.status === 'fulfilled') counts[result.value[0]] = result.value[1]
+      }
+      setAreaCounts((prev) => ({ ...prev, ...counts }))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [token, zones])
 
   useEffect(() => {
     if (!token || !selectedZoneId) return
@@ -106,7 +170,9 @@ export function ZonesPage() {
     try {
       const created = await createZone(token, { name })
       setZones((prev) => [...prev, created])
+      setAreaCounts((prev) => ({ ...prev, [created.id]: 0 }))
       setNewZoneName('')
+      setCreateOpen(false)
     } catch (err) {
       setZoneCreateError(err instanceof ApiError ? err.message : 'Could not create zone.')
     } finally {
@@ -164,6 +230,7 @@ export function ZonesPage() {
     try {
       const created = await createArea(token, selectedZone.id, { name })
       setAreas((prev) => [...prev, created])
+      setAreaCounts((prev) => ({ ...prev, [selectedZone.id]: (prev[selectedZone.id] ?? 0) + 1 }))
       setNewAreaName('')
     } catch (err) {
       setAreaCreateError(err instanceof ApiError ? err.message : 'Could not create area.')
@@ -211,177 +278,154 @@ export function ZonesPage() {
     }
   }
 
+  const createButton = (
+    <button
+      type="button"
+      onClick={() => setCreateOpen(true)}
+      className="flex items-center gap-1.5 rounded-md bg-navy-600 px-3.5 py-2 text-sm font-medium text-white hover:bg-navy-700"
+    >
+      <Plus className="h-4 w-4" aria-hidden="true" />
+      Create zone
+    </button>
+  )
+
   return (
     <Layout>
-      <div className="flex items-center gap-2.5">
-        <span className="flex h-9 w-9 items-center justify-center rounded-md bg-navy-50 text-navy-600">
-          <MapPin className="h-5 w-5" aria-hidden="true" />
-        </span>
-        <h1 className="text-xl font-semibold">Zones</h1>
-      </div>
+      <PageHeader icon={MapPin} title="Zones" description="Manage service zones and their delivery areas." action={createButton} />
 
-      <div className="mt-6 rounded-lg border border-navy-100 bg-white p-6 shadow-sm">
-        <h2 className="text-sm font-semibold text-slate-700">Create a new zone</h2>
-        <form onSubmit={handleCreateZone} className="mt-4 flex flex-wrap items-end gap-4">
-          <ErrorBanner message={zoneCreateError} />
-          <div className="flex-1">
-            <label htmlFor="zone_name" className="block text-sm font-medium text-slate-700">
-              Zone name
-            </label>
-            <input
-              id="zone_name"
-              type="text"
-              value={newZoneName}
-              onChange={(e) => setNewZoneName(e.target.value)}
-              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={creatingZone}
-            className="rounded-md bg-navy-600 px-4 py-2 text-sm font-medium text-white hover:bg-navy-700 disabled:opacity-50"
-          >
-            {creatingZone ? 'Creating…' : 'Create zone'}
+      {selectedZone ? (
+        <div className="mt-6">
+          <button type="button" onClick={() => setSelectedZoneId(null)} className="text-sm text-slate-500 hover:text-slate-800">
+            ← Back to zones
           </button>
-        </form>
-      </div>
 
-      <div className="mt-6 grid gap-6 md:grid-cols-2">
-        <div className="rounded-lg border border-navy-100 bg-white shadow-sm">
-          <h2 className="border-b border-navy-100 px-6 py-4 text-sm font-semibold text-slate-700">All zones</h2>
-          <ErrorBanner message={zonesError} />
-          {zonesLoading ? (
-            <p className="px-6 py-4 text-sm text-slate-500">Loading…</p>
-          ) : zones.length === 0 ? (
-            <p className="px-6 py-4 text-sm text-slate-500">No zones yet.</p>
-          ) : (
-            <ul>
-              {zones.map((zone) => (
-                <li key={zone.id} className="border-t border-slate-100 first:border-t-0">
-                  <button
-                    type="button"
-                    onClick={() => handleSelectZone(zone)}
-                    className={`flex w-full items-center justify-between px-6 py-3 text-left text-sm transition-colors hover:bg-navy-50 ${
-                      zone.id === selectedZoneId ? 'bg-navy-50' : ''
-                    }`}
-                  >
-                    <span>{zone.name}</span>
-                    <StatusBadge label={zone.active ? 'Active' : 'Inactive'} state={zone.active ? 'ok' : 'error'} />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold text-slate-900">{selectedZone.name}</h2>
+            <div className="flex items-center gap-2">
+              <StatusBadge label={selectedZone.active ? 'Active' : 'Inactive'} state={selectedZone.active ? 'ok' : 'error'} />
+              <button
+                type="button"
+                onClick={() => void handleToggleActive()}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+              >
+                {selectedZone.active ? 'Deactivate' : 'Activate'}
+              </button>
+            </div>
+          </div>
 
-        <div className="rounded-lg border border-navy-100 bg-white shadow-sm">
-          {!selectedZone ? (
-            <p className="px-6 py-8 text-center text-sm text-slate-500">Select a zone to manage its areas.</p>
-          ) : (
-            <>
-              <div className="border-b border-navy-100 px-6 py-4">
-                <h2 className="text-sm font-semibold text-slate-700">Manage zone</h2>
-                <form onSubmit={handleRenameZone} className="mt-3 flex flex-wrap items-end gap-3">
-                  <ErrorBanner message={zoneEditError} />
-                  <div className="flex-1">
-                    <label htmlFor="zone_edit_name" className="block text-xs font-medium text-slate-700">
-                      Name
-                    </label>
-                    <input
-                      id="zone_edit_name"
-                      type="text"
-                      value={zoneEditName}
-                      onChange={(e) => setZoneEditName(e.target.value)}
-                      className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
-                    />
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={savingZone}
-                    className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
-                  >
-                    Save name
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleToggleActive}
-                    className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
-                  >
-                    {selectedZone.active ? 'Deactivate' : 'Activate'}
-                  </button>
-                </form>
-              </div>
+          <div className="mt-6 grid gap-6 lg:grid-cols-3">
+            <div className="rounded-lg border border-navy-100 bg-white p-6 shadow-sm lg:col-span-1">
+              <h3 className="text-sm font-semibold text-slate-700">Zone details</h3>
+              <form onSubmit={handleRenameZone} className="mt-4 space-y-3">
+                <ErrorBanner message={zoneEditError} />
+                <div>
+                  <label htmlFor="zone_edit_name" className="block text-xs font-medium text-slate-700">
+                    Name
+                  </label>
+                  <input
+                    id="zone_edit_name"
+                    type="text"
+                    value={zoneEditName}
+                    onChange={(e) => setZoneEditName(e.target.value)}
+                    className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={savingZone}
+                  className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+                >
+                  {savingZone ? 'Saving…' : 'Save name'}
+                </button>
+              </form>
+            </div>
 
+            <div className="rounded-lg border border-navy-100 bg-white shadow-sm lg:col-span-2">
+              <h3 className="border-b border-navy-100 px-6 py-4 text-sm font-semibold text-slate-700">
+                Areas{areas.length > 0 ? ` (${areas.length})` : ''}
+              </h3>
               <div className="px-6 py-4">
-                <h3 className="text-sm font-semibold text-slate-700">Areas in {selectedZone.name}</h3>
                 <ErrorBanner message={areasError} />
                 {areasLoading ? (
-                  <p className="mt-3 text-sm text-slate-500">Loading…</p>
+                  <p className="text-sm text-slate-500">Loading…</p>
                 ) : areas.length === 0 ? (
-                  <p className="mt-3 text-sm text-slate-500">No areas in this zone yet.</p>
+                  <p className="text-sm text-slate-500">No areas in this zone yet.</p>
                 ) : (
-                  <ul className="mt-3 space-y-2">
-                    {areas.map((area) =>
-                      editingAreaId === area.id ? (
-                        <li key={area.id}>
-                          <form onSubmit={handleSaveArea} className="flex items-center gap-2">
-                            <ErrorBanner message={areaEditError} />
-                            <input
-                              aria-label="Edit area name"
-                              type="text"
-                              value={areaEditName}
-                              onChange={(e) => setAreaEditName(e.target.value)}
-                              className="flex-1 rounded-md border border-slate-300 px-3 py-1 text-sm"
-                            />
-                            <button
-                              type="submit"
-                              className="rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
-                            >
-                              Save
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setEditingAreaId(null)}
-                              className="rounded-md px-2 py-1 text-xs text-slate-500 hover:text-slate-700"
-                            >
-                              Cancel
-                            </button>
-                          </form>
-                        </li>
-                      ) : (
-                        <li key={area.id} className="flex items-center justify-between gap-2 rounded-md border border-slate-100 px-3 py-2 text-sm">
-                          <span className="flex items-center gap-2">
-                            {area.name}
-                            {!area.active && <StatusBadge label="Inactive" state="error" />}
-                          </span>
-                          <span className="flex shrink-0 items-center gap-3">
-                            <button
-                              type="button"
-                              onClick={() => startEditArea(area)}
-                              className="text-xs font-medium text-slate-500 hover:text-slate-800"
-                            >
-                              Rename
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => void handleToggleAreaActive(area)}
-                              className="text-xs font-medium text-slate-500 hover:text-slate-800"
-                            >
-                              {area.active ? 'Deactivate' : 'Activate'}
-                            </button>
-                          </span>
-                        </li>
-                      ),
-                    )}
-                  </ul>
+                  <table className="w-full text-left text-sm">
+                    <thead className="text-xs font-medium tracking-wide text-slate-400 uppercase">
+                      <tr>
+                        <th className="py-2">Area name</th>
+                        <th className="py-2">Status</th>
+                        <th className="py-2 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {areas.map((area) =>
+                        editingAreaId === area.id ? (
+                          <tr key={area.id} className="border-t border-slate-100">
+                            <td colSpan={3} className="py-2">
+                              <form onSubmit={handleSaveArea} className="flex flex-wrap items-center gap-2">
+                                <ErrorBanner message={areaEditError} />
+                                <input
+                                  aria-label="Edit area name"
+                                  type="text"
+                                  value={areaEditName}
+                                  onChange={(e) => setAreaEditName(e.target.value)}
+                                  className="flex-1 rounded-md border border-slate-300 px-3 py-1 text-sm"
+                                />
+                                <button
+                                  type="submit"
+                                  className="rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                                >
+                                  Save
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingAreaId(null)}
+                                  className="rounded-md px-2 py-1 text-xs text-slate-500 hover:text-slate-700"
+                                >
+                                  Cancel
+                                </button>
+                              </form>
+                            </td>
+                          </tr>
+                        ) : (
+                          <tr key={area.id} className="border-t border-slate-100">
+                            <td className="py-2.5 font-medium text-slate-900">{area.name}</td>
+                            <td className="py-2.5">
+                              <StatusBadge label={area.active ? 'Active' : 'Inactive'} state={area.active ? 'ok' : 'error'} />
+                            </td>
+                            <td className="py-2.5 text-right">
+                              <span className="inline-flex gap-3">
+                                <button
+                                  type="button"
+                                  onClick={() => startEditArea(area)}
+                                  className="text-xs font-medium text-slate-500 hover:text-slate-800"
+                                >
+                                  Rename
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void handleToggleAreaActive(area)}
+                                  className="text-xs font-medium text-slate-500 hover:text-slate-800"
+                                >
+                                  {area.active ? 'Deactivate' : 'Activate'}
+                                </button>
+                              </span>
+                            </td>
+                          </tr>
+                        ),
+                      )}
+                    </tbody>
+                  </table>
                 )}
 
-                <form onSubmit={handleCreateArea} className="mt-4 flex items-end gap-3">
-                  <ErrorBanner message={areaCreateError} />
+                <form onSubmit={handleCreateArea} className="mt-4 flex items-end gap-3 border-t border-slate-100 pt-4">
                   <div className="flex-1">
                     <label htmlFor="area_name" className="block text-xs font-medium text-slate-700">
                       New area name
                     </label>
+                    <ErrorBanner message={areaCreateError} />
                     <input
                       id="area_name"
                       type="text"
@@ -399,10 +443,163 @@ export function ZonesPage() {
                   </button>
                 </form>
               </div>
-            </>
-          )}
+            </div>
+          </div>
         </div>
-      </div>
+      ) : (
+        <>
+          <div className="mt-6 flex flex-wrap items-end gap-3 rounded-lg border border-navy-100 bg-white p-4 shadow-sm">
+            <div className="min-w-56 flex-1">
+              <label htmlFor="zone-search" className="block text-xs font-medium text-slate-500">
+                Search
+              </label>
+              <div className="relative mt-1">
+                <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-slate-400" aria-hidden="true" />
+                <input
+                  id="zone-search"
+                  type="text"
+                  aria-label="Search zones"
+                  value={zoneSearch}
+                  onChange={(e) => setZoneSearch(e.target.value)}
+                  placeholder="Search by zone name…"
+                  className="w-full rounded-md border border-slate-300 py-2 pr-3 pl-9 text-sm transition-colors focus:border-navy-500"
+                />
+              </div>
+            </div>
+            <div>
+              <label htmlFor="zone-status-filter" className="block text-xs font-medium text-slate-500">
+                Status
+              </label>
+              <Select
+                id="zone-status-filter"
+                value={statusFilter}
+                onChange={setStatusFilter}
+                placeholder="All statuses"
+                className="mt-1 w-40"
+                options={[
+                  { value: 'active', label: 'Active' },
+                  { value: 'inactive', label: 'Inactive' },
+                ]}
+              />
+            </div>
+            {hasActiveFilter && (
+              <button
+                type="button"
+                onClick={() => {
+                  setZoneSearch('')
+                  setStatusFilter('')
+                }}
+                className="rounded-md border border-slate-300 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100"
+              >
+                Clear filters
+              </button>
+            )}
+          </div>
+
+          <div className="mt-6 overflow-hidden rounded-lg border border-navy-100 bg-white shadow-sm">
+            <ErrorBanner message={zonesError} />
+            {zonesLoading ? (
+              <div className="space-y-3 p-6">
+                {[0, 1, 2].map((i) => (
+                  <div key={i} className="h-14 animate-pulse rounded-md bg-slate-100" />
+                ))}
+              </div>
+            ) : zones.length === 0 ? (
+              <EmptyState icon={MapPin} title="No zones yet" description="Create your first zone to start organizing pickup and drop areas." />
+            ) : displayedZones.length === 0 ? (
+              <EmptyState icon={Search} title="No zones match your search." description="Try a different name or filter." />
+            ) : (
+              <>
+                <div className="hidden sm:block">
+                  <table className="w-full text-left text-sm">
+                    <thead className="border-b border-navy-100 bg-navy-50/95 text-xs font-medium tracking-wide text-navy-700 uppercase">
+                      <tr>
+                        <th className="px-6 py-3">Zone</th>
+                        <th className="px-6 py-3">Areas</th>
+                        <th className="px-6 py-3">Status</th>
+                        <th className="px-6 py-3" aria-hidden="true" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {pagedZones.map((zone) => (
+                        <tr
+                          key={zone.id}
+                          onClick={() => handleSelectZone(zone)}
+                          className="group cursor-pointer border-t border-slate-100 transition-colors hover:bg-navy-50/50"
+                        >
+                          <td className="max-w-md px-6 py-3">
+                            <button
+                              type="button"
+                              onClick={() => handleSelectZone(zone)}
+                              title={zone.name}
+                              className="block truncate font-medium text-navy-700 hover:underline"
+                            >
+                              {zone.name}
+                            </button>
+                          </td>
+                          <td className="px-6 py-3 tabular-nums text-slate-600">{areaCounts[zone.id] ?? '—'}</td>
+                          <td className="px-6 py-3">
+                            <StatusBadge label={zone.active ? 'Active' : 'Inactive'} state={zone.active ? 'ok' : 'error'} />
+                          </td>
+                          <td className="px-6 py-3 text-right">
+                            <ChevronRight className="h-4 w-4 text-slate-300 transition-colors group-hover:text-navy-500" aria-hidden="true" />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                <div className="divide-y divide-slate-100 sm:hidden">
+                  {pagedZones.map((zone) => (
+                    <button
+                      key={zone.id}
+                      type="button"
+                      onClick={() => handleSelectZone(zone)}
+                      className="flex w-full items-center justify-between gap-2 px-4 py-3 text-left transition-colors hover:bg-navy-50/50"
+                    >
+                      <span>
+                        <span className="block font-medium text-slate-900">{zone.name}</span>
+                        <span className="block text-xs text-slate-500">
+                          {areaCounts[zone.id] ?? '—'} area{areaCounts[zone.id] === 1 ? '' : 's'}
+                        </span>
+                      </span>
+                      <StatusBadge label={zone.active ? 'Active' : 'Inactive'} state={zone.active ? 'ok' : 'error'} />
+                    </button>
+                  ))}
+                </div>
+
+                <Pagination page={page} totalItems={displayedZones.length} pageSize={PAGE_SIZE} onPageChange={setPage} />
+              </>
+            )}
+          </div>
+        </>
+      )}
+
+      <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="Create zone">
+        <form onSubmit={handleCreateZone} className="space-y-4">
+          <ErrorBanner message={zoneCreateError} />
+          <div>
+            <label htmlFor="zone_name" className="block text-sm font-medium text-slate-700">
+              Zone name
+            </label>
+            <input
+              id="zone_name"
+              type="text"
+              value={newZoneName}
+              onChange={(e) => setNewZoneName(e.target.value)}
+              className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={creatingZone}
+            className="w-full rounded-md bg-navy-600 px-4 py-2 text-sm font-medium text-white hover:bg-navy-700 disabled:opacity-50"
+          >
+            {creatingZone ? 'Creating…' : 'Create zone'}
+          </button>
+        </form>
+      </Modal>
     </Layout>
   )
 }
