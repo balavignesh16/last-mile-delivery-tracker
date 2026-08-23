@@ -184,6 +184,48 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /api/v1/agents/{id}:
+    get:
+      tags: [Agents]
+      summary: Retrieve one agent's detail (ADMIN only)
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Agent" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/v1/agents/{id}/active:
+    put:
+      tags: [Agents]
+      summary: Activate or deactivate an agent (ADMIN only) — reversible, blocks new assignment eligibility only
+      parameters:
+        - $ref: "#/components/parameters/PathId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [active]
+              properties:
+                active: { type: boolean }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Agent" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "422": { $ref: "#/components/responses/Unprocessable" }
+
   /api/v1/agents/{id}/availability:
     put:
       tags: [Agents]
@@ -392,7 +434,7 @@ paths:
   /api/v1/zones/{zoneID}/areas/{areaID}:
     put:
       tags: [Zones]
-      summary: Rename an area (ADMIN only) — moving it to another zone is not supported
+      summary: Rename and/or activate/deactivate an area (ADMIN only) — moving it to another zone is not supported
       parameters:
         - name: zoneID
           in: path
@@ -411,6 +453,7 @@ paths:
               required: [name]
               properties:
                 name: { type: string }
+                active: { type: boolean }
       responses:
         "200":
           description: OK
@@ -950,6 +993,7 @@ components:
         id: { type: string, format: uuid }
         name: { type: string }
         zone_id: { type: string, format: uuid }
+        active: { type: boolean }
         created_at: { type: string, format: date-time }
 
     RateCard:

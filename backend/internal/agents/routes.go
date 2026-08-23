@@ -38,6 +38,16 @@ func Mount(repo Repository, zonesRepo zones.Repository, jwtSecret string) func(c
 
 		v1.With(
 			auth.RequireAuth(jwtSecret),
+			auth.RequireRole(users.RoleAdmin),
+		).Get("/agents/{id}", GetAgentHandler(repo))
+
+		v1.With(
+			auth.RequireAuth(jwtSecret),
+			auth.RequireRole(users.RoleAdmin),
+		).Put("/agents/{id}/active", UpdateActiveHandler(repo))
+
+		v1.With(
+			auth.RequireAuth(jwtSecret),
 			auth.RequireRole(users.RoleDeliveryAgent),
 		).Get("/agents/me", GetMyAgentHandler(repo))
 

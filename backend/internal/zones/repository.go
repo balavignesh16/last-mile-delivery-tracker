@@ -126,7 +126,7 @@ func (r *PostgresRepository) UpdateZone(ctx context.Context, id string, update Z
 	return z, nil
 }
 
-const areaColumns = `id, name, zone_id, created_at`
+const areaColumns = `id, name, zone_id, active, created_at`
 
 // CreateArea maps a foreign-key violation to ErrZoneNotFound as
 // defense-in-depth. CreateAreaHandler already checks the zone exists
@@ -185,9 +185,15 @@ func (r *PostgresRepository) FindAreaByID(ctx context.Context, id string) (Area,
 	return a, nil
 }
 
+// UpdateArea always writes name; active is only overwritten when the
+// caller provided one (Active != nil) — same COALESCE contract as
+// UpdateZone.
 func (r *PostgresRepository) UpdateArea(ctx context.Context, areaID string, update AreaUpdate) (Area, error) {
-	const stmt = `UPDATE areas SET name = $1 WHERE id = $2 RETURNING ` + areaColumns
-	a, err := scanArea(r.pool.QueryRow(ctx, stmt, update.Name, areaID))
+	const stmt = `
+		UPDATE areas SET name = $1, active = COALESCE($2, active)
+		WHERE id = $3
+		RETURNING ` + areaColumns
+	a, err := scanArea(r.pool.QueryRow(ctx, stmt, update.Name, update.Active, areaID))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Area{}, ErrAreaNotFound
@@ -216,6 +222,6 @@ func scanZone(row rowScanner) (Zone, error) {
 
 func scanArea(row rowScanner) (Area, error) {
 	var a Area
-	err := row.Scan(&a.ID, &a.Name, &a.ZoneID, &a.CreatedAt)
+	err := row.Scan(&a.ID, &a.Name, &a.ZoneID, &a.Active, &a.CreatedAt)
 	return a, err
 }

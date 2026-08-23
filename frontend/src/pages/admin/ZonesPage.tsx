@@ -196,6 +196,21 @@ export function ZonesPage() {
     }
   }
 
+  // Toggles active using the area's currently saved name, not whatever is
+  // sitting in the rename field — same reasoning as handleToggleActive
+  // for zones: activating/deactivating must never have an unintended
+  // side effect of also renaming.
+  async function handleToggleAreaActive(area: Area) {
+    if (!token || !selectedZone) return
+    setAreaEditError(null)
+    try {
+      const updated = await updateArea(token, selectedZone.id, area.id, { name: area.name, active: !area.active })
+      setAreas((prev) => prev.map((a) => (a.id === updated.id ? updated : a)))
+    } catch (err) {
+      setAreaEditError(err instanceof ApiError ? err.message : 'Could not update area.')
+    }
+  }
+
   return (
     <Layout>
       <div className="flex items-center gap-2.5">
@@ -334,15 +349,27 @@ export function ZonesPage() {
                           </form>
                         </li>
                       ) : (
-                        <li key={area.id} className="flex items-center justify-between rounded-md border border-slate-100 px-3 py-2 text-sm">
-                          <span>{area.name}</span>
-                          <button
-                            type="button"
-                            onClick={() => startEditArea(area)}
-                            className="text-xs font-medium text-slate-500 hover:text-slate-800"
-                          >
-                            Rename
-                          </button>
+                        <li key={area.id} className="flex items-center justify-between gap-2 rounded-md border border-slate-100 px-3 py-2 text-sm">
+                          <span className="flex items-center gap-2">
+                            {area.name}
+                            {!area.active && <StatusBadge label="Inactive" state="error" />}
+                          </span>
+                          <span className="flex shrink-0 items-center gap-3">
+                            <button
+                              type="button"
+                              onClick={() => startEditArea(area)}
+                              className="text-xs font-medium text-slate-500 hover:text-slate-800"
+                            >
+                              Rename
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void handleToggleAreaActive(area)}
+                              className="text-xs font-medium text-slate-500 hover:text-slate-800"
+                            >
+                              {area.active ? 'Deactivate' : 'Activate'}
+                            </button>
+                          </span>
                         </li>
                       ),
                     )}

@@ -18,6 +18,14 @@ import (
 // accident.
 var ErrZoneInactive = errors.New("zone is inactive")
 
+// ErrAreaInactive is returned by ResolveArea/ResolvePickupDrop when the
+// area itself has been deactivated — independent of its zone's own
+// active state. Same reasoning as ErrZoneInactive: an admin deactivates
+// a single area specifically to retire it from operational use without
+// having to deactivate every other area in the same zone, so resolving
+// an order through it silently would defeat that purpose.
+var ErrAreaInactive = errors.New("area is inactive")
+
 // ResolveArea resolves a single area to its zone — the Address -> Area ->
 // Zone chain the frozen architecture specifies, minus "Address": this
 // project has no geocoding, so the caller supplies an area id directly
@@ -26,9 +34,10 @@ var ErrZoneInactive = errors.New("zone is inactive")
 // external service. See the M04 report's STEP 9 discussion for why that
 // boundary was chosen.
 //
-// Returns ErrAreaNotFound if the area does not exist, ErrZoneInactive if
-// the area's zone has been deactivated, or a wrapped error if the area's
-// zone_id fails to resolve at all — unreachable in practice given the
+// Returns ErrAreaNotFound if the area does not exist, ErrAreaInactive if
+// the area itself has been deactivated, ErrZoneInactive if the area's
+// zone has been deactivated, or a wrapped error if the area's zone_id
+// fails to resolve at all — unreachable in practice given the
 // areas.zone_id foreign key, but handled explicitly rather than assumed
 // away, per the task's "area has invalid zone -> server/data-integrity
 // error" requirement.
@@ -36,6 +45,9 @@ func ResolveArea(ctx context.Context, repo Repository, areaID string) (Area, Zon
 	area, err := repo.FindAreaByID(ctx, areaID)
 	if err != nil {
 		return Area{}, Zone{}, err
+	}
+	if !area.Active {
+		return Area{}, Zone{}, ErrAreaInactive
 	}
 
 	zone, err := repo.FindZoneByID(ctx, area.ZoneID)

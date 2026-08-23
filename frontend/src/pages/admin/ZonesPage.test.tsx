@@ -135,7 +135,7 @@ describe('ZonesPage', () => {
       const url = String(input)
       if (url === '/api/v1/zones') return jsonResponse(200, [existingZone])
       if (url === '/api/v1/zones/z1/areas') {
-        return jsonResponse(200, [{ id: 'a1', name: 'Downtown', zone_id: 'z1', created_at: '2026-01-01T00:00:00Z' }])
+        return jsonResponse(200, [{ id: 'a1', name: 'Downtown', zone_id: 'z1', active: true, created_at: '2026-01-01T00:00:00Z' }])
       }
       return jsonResponse(200, [])
     })
@@ -181,7 +181,7 @@ describe('ZonesPage', () => {
       const url = String(input)
       if (url === '/api/v1/zones') return jsonResponse(200, [existingZone])
       if (url === '/api/v1/zones/z1/areas' && init?.method === 'POST') {
-        return jsonResponse(201, { id: 'a2', name: 'Suburb', zone_id: 'z1', created_at: '2026-01-01T00:00:00Z' })
+        return jsonResponse(201, { id: 'a2', name: 'Suburb', zone_id: 'z1', active: true, created_at: '2026-01-01T00:00:00Z' })
       }
       if (url === '/api/v1/zones/z1/areas') return jsonResponse(200, [])
       return jsonResponse(200, [])
@@ -230,5 +230,42 @@ describe('ZonesPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /deactivate/i }))
 
     await waitFor(() => expect(screen.getByRole('button', { name: /activate/i })).toBeTruthy())
+  })
+
+  it('toggles an area active state independently of its zone', async () => {
+    mockAdminAuth()
+    const area = { id: 'a1', name: 'Downtown', zone_id: 'z1', active: true, created_at: '2026-01-01T00:00:00Z' }
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/v1/zones') return jsonResponse(200, [existingZone])
+      if (url === '/api/v1/zones/z1/areas/a1' && init?.method === 'PUT') {
+        return jsonResponse(200, { ...area, active: false })
+      }
+      if (url === '/api/v1/zones/z1/areas') return jsonResponse(200, [area])
+      return jsonResponse(200, [])
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <MemoryRouter>
+        <ZonesPage />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText('North Zone')).toBeTruthy())
+    fireEvent.click(screen.getByText('North Zone'))
+    await waitFor(() => expect(screen.getByText('Downtown')).toBeTruthy())
+
+    // Two "Deactivate" buttons exist once an area is shown: the zone's
+    // own and this area's — the area's is the second one.
+    const deactivateButtons = screen.getAllByRole('button', { name: /deactivate/i })
+    fireEvent.click(deactivateButtons[deactivateButtons.length - 1])
+
+    await waitFor(() => expect(screen.getAllByText('Inactive').length).toBeGreaterThan(0))
+
+    const putCall = fetchMock.mock.calls.find(([url, init]) => String(url) === '/api/v1/zones/z1/areas/a1' && (init as RequestInit | undefined)?.method === 'PUT')
+    expect(putCall).toBeTruthy()
+    const [, init] = putCall as [string, RequestInit]
+    expect(JSON.parse(init.body as string)).toEqual({ name: 'Downtown', active: false })
   })
 })

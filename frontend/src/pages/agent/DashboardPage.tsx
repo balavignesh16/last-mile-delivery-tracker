@@ -7,7 +7,9 @@ import { StatusBadge } from '../../components/StatusBadge'
 import { useAuth } from '../../hooks/useAuth'
 import { fetchMyAgentProfile } from '../../services/agents'
 import { ApiError } from '../../services/api'
+import { listZones } from '../../services/zones'
 import type { Agent, Availability } from '../../types/agent'
+import type { Zone } from '../../types/zone'
 
 const AVAILABILITY_STATE: Record<Availability, 'ok' | 'degraded' | 'error'> = {
   AVAILABLE: 'ok',
@@ -30,6 +32,7 @@ const AVAILABILITY_STATE: Record<Availability, 'ok' | 'degraded' | 'error'> = {
 export function DashboardPage() {
   const { user, token } = useAuth()
   const [agent, setAgent] = useState<Agent | null>(null)
+  const [zones, setZones] = useState<Zone[]>([])
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
@@ -41,6 +44,14 @@ export function DashboardPage() {
       })
       .catch((err: unknown) => {
         if (!cancelled) setError(err instanceof ApiError ? err.message : 'Could not load your operational status.')
+      })
+    listZones(token)
+      .then((list) => {
+        if (!cancelled) setZones(list)
+      })
+      .catch(() => {
+        // Non-fatal: the zone card just falls back to showing "Set"
+        // without a name if the zone list failed to load.
       })
     return () => {
       cancelled = true
@@ -65,7 +76,9 @@ export function DashboardPage() {
             </span>
             <div>
               <p className="text-xs font-medium text-slate-500">Current zone</p>
-              <p className="text-sm font-semibold text-slate-900">{agent.current_zone_id ? 'Set' : 'Not set'}</p>
+              <p className="text-sm font-semibold text-slate-900">
+                {agent.current_zone_id ? (zones.find((z) => z.id === agent.current_zone_id)?.name ?? 'Set') : 'Not set'}
+              </p>
             </div>
           </div>
         </div>

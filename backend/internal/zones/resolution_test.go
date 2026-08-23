@@ -95,6 +95,31 @@ func TestResolveArea_InactiveZoneIsRejected(t *testing.T) {
 	}
 }
 
+// TestResolveArea_InactiveAreaIsRejected verifies deactivating a single
+// area blocks resolution even when its parent zone is still active —
+// independent of TestResolveArea_InactiveZoneIsRejected, which covers
+// the zone-level check.
+func TestResolveArea_InactiveAreaIsRejected(t *testing.T) {
+	repo := newFakeRepo()
+	zone, err := repo.CreateZone(context.Background(), CreateZoneInput{Name: "StillActiveZone"})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+	area, err := repo.CreateArea(context.Background(), zone.ID, CreateAreaInput{Name: "InactiveArea"})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+	inactive := false
+	if _, err := repo.UpdateArea(context.Background(), area.ID, AreaUpdate{Name: area.Name, Active: &inactive}); err != nil {
+		t.Fatalf("deactivate area failed: %v", err)
+	}
+
+	_, _, err = ResolveArea(context.Background(), repo, area.ID)
+	if !errors.Is(err, ErrAreaInactive) {
+		t.Errorf("error = %v, want ErrAreaInactive", err)
+	}
+}
+
 func TestResolveArea_ActiveZoneSucceeds(t *testing.T) {
 	repo := newFakeRepo()
 	zone, err := repo.CreateZone(context.Background(), CreateZoneInput{Name: "ActiveZone"})

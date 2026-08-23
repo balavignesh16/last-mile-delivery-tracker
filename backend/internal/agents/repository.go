@@ -51,6 +51,15 @@ type Repository interface {
 	// application; see docs/user-agent-management.md for why it was
 	// missing until now.
 	UpdateZone(ctx context.Context, id, zoneID string) (AgentWithUser, error)
+	// UpdateActive sets the active column — the other half of the pair
+	// assignment.IsEligible reads (active && availability == AVAILABLE &&
+	// current_zone_id != nil). Soft and fully reversible, same as
+	// zones.UpdateZone/rates.UpdateRateCard's own active toggles: it never
+	// deletes the agent, never touches their order/assignment history, and
+	// only blocks *new* assignment eligibility going forward — an agent
+	// deactivated mid-delivery keeps whatever order they're already
+	// holding.
+	UpdateActive(ctx context.Context, id string, active bool) (AgentWithUser, error)
 }
 
 type PostgresRepository struct {
@@ -194,6 +203,17 @@ func (r *PostgresRepository) UpdateZone(ctx context.Context, id, zoneID string) 
 			return AgentWithUser{}, ErrInvalidZone
 		}
 		return AgentWithUser{}, fmt.Errorf("update zone: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return AgentWithUser{}, ErrNotFound
+	}
+	return r.FindByID(ctx, id)
+}
+
+func (r *PostgresRepository) UpdateActive(ctx context.Context, id string, active bool) (AgentWithUser, error) {
+	tag, err := r.pool.Exec(ctx, `UPDATE delivery_agents SET active = $1 WHERE id = $2`, active, id)
+	if err != nil {
+		return AgentWithUser{}, fmt.Errorf("update active: %w", err)
 	}
 	if tag.RowsAffected() == 0 {
 		return AgentWithUser{}, ErrNotFound

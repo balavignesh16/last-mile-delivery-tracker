@@ -93,7 +93,7 @@ func (f *fakeRepo) CreateArea(_ context.Context, zoneID string, input CreateArea
 		return Area{}, ErrAreaNameTaken
 	}
 	f.nextID++
-	a := Area{ID: fmt.Sprintf("fake-area-%d", f.nextID), Name: input.Name, ZoneID: zoneID, CreatedAt: time.Now()}
+	a := Area{ID: fmt.Sprintf("fake-area-%d", f.nextID), Name: input.Name, ZoneID: zoneID, Active: true, CreatedAt: time.Now()}
 	f.areasByID[a.ID] = a
 	f.areaNames[key] = true
 	return a, nil
@@ -129,6 +129,9 @@ func (f *fakeRepo) UpdateArea(_ context.Context, areaID string, update AreaUpdat
 	delete(f.areaNames, a.ZoneID+"|"+a.Name)
 	a.Name = update.Name
 	f.areaNames[key] = true
+	if update.Active != nil {
+		a.Active = *update.Active
+	}
 	f.areasByID[areaID] = a
 	return a, nil
 }
@@ -458,6 +461,70 @@ func TestUpdateAreaHandler_RenameSucceeds(t *testing.T) {
 	body := decodeJSON[map[string]any](t, rec)
 	if body["name"] != "NewArea" {
 		t.Errorf("name = %v, want NewArea", body["name"])
+	}
+}
+
+// TestUpdateAreaHandler_ActiveToggleIsReversible verifies deactivating
+// and reactivating an area via the same PUT-based rename endpoint —
+// mirroring UpdateZoneHandler's own combined rename+active shape.
+func TestUpdateAreaHandler_ActiveToggleIsReversible(t *testing.T) {
+	repo := newFakeRepo()
+	zone, err := repo.CreateZone(context.Background(), CreateZoneInput{Name: "ZA"})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+	area, err := repo.CreateArea(context.Background(), zone.ID, CreateAreaInput{Name: "ToggleArea"})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+	if !area.Active {
+		t.Fatalf("newly created area should start active")
+	}
+
+	handler := UpdateAreaHandler(repo)
+	path := "/api/v1/zones/" + zone.ID + "/areas/" + area.ID
+	params := map[string]string{"zoneID": zone.ID, "areaID": area.ID}
+
+	deactivate := doRequest(t, handler, http.MethodPut, path, `{"name":"ToggleArea","active":false}`, params)
+	if deactivate.Code != http.StatusOK {
+		t.Fatalf("deactivate status = %d, want %d, body: %s", deactivate.Code, http.StatusOK, deactivate.Body.String())
+	}
+	if body := decodeJSON[map[string]any](t, deactivate); body["active"] != false {
+		t.Errorf("active = %v, want false", body["active"])
+	}
+
+	reactivate := doRequest(t, handler, http.MethodPut, path, `{"name":"ToggleArea","active":true}`, params)
+	if reactivate.Code != http.StatusOK {
+		t.Fatalf("reactivate status = %d, want %d, body: %s", reactivate.Code, http.StatusOK, reactivate.Body.String())
+	}
+	if body := decodeJSON[map[string]any](t, reactivate); body["active"] != true {
+		t.Errorf("active = %v, want true", body["active"])
+	}
+}
+
+// TestUpdateAreaHandler_OmittedActiveLeavesItUnchanged verifies a plain
+// rename (no "active" field in the request body) does not accidentally
+// flip an area's active state — the same nil-means-unchanged contract
+// zones.ZoneUpdate.Active already guarantees.
+func TestUpdateAreaHandler_OmittedActiveLeavesItUnchanged(t *testing.T) {
+	repo := newFakeRepo()
+	zone, err := repo.CreateZone(context.Background(), CreateZoneInput{Name: "ZO"})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+	area, err := repo.CreateArea(context.Background(), zone.ID, CreateAreaInput{Name: "OmitActive"})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+
+	rec := doRequest(t, UpdateAreaHandler(repo), http.MethodPut, "/api/v1/zones/"+zone.ID+"/areas/"+area.ID,
+		`{"name":"OmitActiveRenamed"}`, map[string]string{"zoneID": zone.ID, "areaID": area.ID})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	body := decodeJSON[map[string]any](t, rec)
+	if body["active"] != true {
+		t.Errorf("active = %v, want true (unchanged)", body["active"])
 	}
 }
 

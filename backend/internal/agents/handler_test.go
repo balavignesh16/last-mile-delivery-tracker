@@ -113,6 +113,16 @@ func (f *fakeRepo) UpdateZone(_ context.Context, id, zoneID string) (AgentWithUs
 	return a, nil
 }
 
+func (f *fakeRepo) UpdateActive(_ context.Context, id string, active bool) (AgentWithUser, error) {
+	a, ok := f.byID[id]
+	if !ok {
+		return AgentWithUser{}, ErrNotFound
+	}
+	a.Active = active
+	f.byID[id] = a
+	return a, nil
+}
+
 // fakeZonesRepo is a minimal in-memory zones.Repository for
 // UpdateZoneHandler's unit tests — this package's own copy rather than
 // reaching into internal/zones' unexported test fakes, the same
@@ -666,6 +676,94 @@ func TestUpdateZoneHandler_UnauthenticatedReturns401(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
+	}
+}
+
+// --- GetAgent ---
+
+func TestGetAgentHandler_ReturnsAgent(t *testing.T) {
+	repo := newFakeRepo()
+	created, err := repo.Create(context.Background(), CreateAgentInput{Email: "detail@example.com", FullName: "Detail"})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+
+	rec := doRequest(t, GetAgentHandler(repo), http.MethodGet, "/api/v1/agents/"+created.ID, "", map[string]string{"id": created.ID})
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	body := decodeJSON[map[string]any](t, rec)
+	if body["id"] != created.ID {
+		t.Errorf("id = %v, want %v", body["id"], created.ID)
+	}
+}
+
+func TestGetAgentHandler_UnknownIDReturns404(t *testing.T) {
+	repo := newFakeRepo()
+	rec := doRequest(t, GetAgentHandler(repo), http.MethodGet, "/api/v1/agents/does-not-exist", "", map[string]string{"id": "does-not-exist"})
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+// --- UpdateActive ---
+
+func TestUpdateActiveHandler_DeactivateAndReactivate(t *testing.T) {
+	repo := newFakeRepo()
+	created, err := repo.Create(context.Background(), CreateAgentInput{Email: "toggle@example.com", FullName: "Toggle"})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+	if !created.Active {
+		t.Fatalf("newly created agent should start active")
+	}
+
+	handler := UpdateActiveHandler(repo)
+
+	deactivate := doRequest(t, handler, http.MethodPut, "/api/v1/agents/"+created.ID+"/active",
+		`{"active":false}`, map[string]string{"id": created.ID})
+	if deactivate.Code != http.StatusOK {
+		t.Fatalf("deactivate status = %d, want %d, body: %s", deactivate.Code, http.StatusOK, deactivate.Body.String())
+	}
+	deactivated := decodeJSON[map[string]any](t, deactivate)
+	if deactivated["active"] != false {
+		t.Errorf("active = %v, want false", deactivated["active"])
+	}
+
+	// Reversible — deactivation is never one-way, same as
+	// zones/rate-cards' own active toggles.
+	reactivate := doRequest(t, handler, http.MethodPut, "/api/v1/agents/"+created.ID+"/active",
+		`{"active":true}`, map[string]string{"id": created.ID})
+	if reactivate.Code != http.StatusOK {
+		t.Fatalf("reactivate status = %d, want %d, body: %s", reactivate.Code, http.StatusOK, reactivate.Body.String())
+	}
+	reactivated := decodeJSON[map[string]any](t, reactivate)
+	if reactivated["active"] != true {
+		t.Errorf("active = %v, want true", reactivated["active"])
+	}
+}
+
+func TestUpdateActiveHandler_MissingActiveRejected(t *testing.T) {
+	repo := newFakeRepo()
+	created, err := repo.Create(context.Background(), CreateAgentInput{Email: "missing-active@example.com", FullName: "X"})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+
+	rec := doRequest(t, UpdateActiveHandler(repo), http.MethodPut, "/api/v1/agents/"+created.ID+"/active",
+		`{}`, map[string]string{"id": created.ID})
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusUnprocessableEntity)
+	}
+}
+
+func TestUpdateActiveHandler_UnknownIDReturns404(t *testing.T) {
+	repo := newFakeRepo()
+	rec := doRequest(t, UpdateActiveHandler(repo), http.MethodPut, "/api/v1/agents/does-not-exist/active",
+		`{"active":false}`, map[string]string{"id": "does-not-exist"})
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
 	}
 }
 

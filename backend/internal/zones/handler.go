@@ -36,6 +36,7 @@ type areaResponse struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
 	ZoneID    string `json:"zone_id"`
+	Active    bool   `json:"active"`
 	CreatedAt string `json:"created_at"`
 }
 
@@ -44,6 +45,7 @@ func toAreaResponse(a Area) areaResponse {
 		ID:        a.ID,
 		Name:      a.Name,
 		ZoneID:    a.ZoneID,
+		Active:    a.Active,
 		CreatedAt: a.CreatedAt.Format(time.RFC3339),
 	}
 }
@@ -286,11 +288,15 @@ func ListAreasHandler(repo Repository) http.HandlerFunc {
 
 type updateAreaRequest struct {
 	Name string `json:"name"`
+	// Active is a pointer so an omitted field means "leave unchanged" —
+	// see AreaUpdate's doc.
+	Active *bool `json:"active"`
 }
 
 // UpdateAreaHandler handles PUT /api/v1/zones/{zoneID}/areas/{areaID}
-// (admin-only). Renaming only — see AreaUpdate's doc for why moving an
-// area between zones isn't offered.
+// (admin-only). Renaming and active-toggling — the same "one PUT does
+// both" shape UpdateZoneHandler already uses; see AreaUpdate's doc for
+// why moving an area between zones isn't offered.
 func UpdateAreaHandler(repo Repository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		zoneID := chi.URLParam(r, "zoneID")
@@ -330,7 +336,7 @@ func UpdateAreaHandler(repo Repository) http.HandlerFunc {
 			return
 		}
 
-		updated, err := repo.UpdateArea(r.Context(), areaID, AreaUpdate{Name: name})
+		updated, err := repo.UpdateArea(r.Context(), areaID, AreaUpdate{Name: name, Active: req.Active})
 		if err != nil {
 			if errors.Is(err, ErrAreaNameTaken) {
 				server.WriteError(w, http.StatusConflict, err.Error())

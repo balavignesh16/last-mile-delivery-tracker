@@ -21,10 +21,19 @@ type Zone struct {
 // Area belongs to exactly one Zone. There is no "unassigned" area state
 // — ZoneID is always a real zones.id, enforced by the database FK, not
 // just application code.
+//
+// Active mirrors Zone.Active — deactivating an area (Active=false) does
+// not delete it, only blocks it from being resolved for new orders/
+// quotes (see ResolveArea's ErrAreaInactive). Areas originally had no
+// independent active flag of their own (their parent zone's Active was
+// considered sufficient — see the 0004 migration's original comment),
+// but an admin legitimately needs to retire a single area without
+// deactivating every other area in the same zone.
 type Area struct {
 	ID        string
 	Name      string
 	ZoneID    string
+	Active    bool
 	CreatedAt time.Time
 }
 
@@ -51,11 +60,14 @@ type CreateAreaInput struct {
 	Name string
 }
 
-// AreaUpdate is UpdateArea's only input. Renaming only — moving an area
-// to a different zone is not a requirement the assignment or frozen
-// architecture states, so it isn't offered.
+// AreaUpdate is UpdateArea's only input. Renaming and active-toggling
+// only — moving an area to a different zone is not a requirement the
+// assignment or frozen architecture states, so it isn't offered. Active
+// is a pointer with the same "nil means unchanged" contract as
+// ZoneUpdate.Active.
 type AreaUpdate struct {
-	Name string
+	Name   string
+	Active *bool
 }
 
 // ZoneRelationship classifies a pickup/drop area pair for M06's rate

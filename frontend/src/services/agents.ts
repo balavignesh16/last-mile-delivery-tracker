@@ -13,6 +13,14 @@ export function fetchMyAgentProfile(token: string): Promise<Agent> {
   return apiGet<Agent>('/api/v1/agents/me', token)
 }
 
+export function fetchAgent(token: string, agentId: string): Promise<Agent> {
+  return apiGet<Agent>(`/api/v1/agents/${agentId}`, token)
+}
+
+export function updateAgentActive(token: string, agentId: string, active: boolean): Promise<Agent> {
+  return apiPut<Agent>(`/api/v1/agents/${agentId}/active`, { active }, token)
+}
+
 export function updateAgentAvailability(token: string, agentId: string, availability: Availability): Promise<Agent> {
   return apiPut<Agent>(`/api/v1/agents/${agentId}/availability`, { availability }, token)
 }

@@ -186,6 +186,8 @@ func MapQuoteError(err error) (status int, message string, ok bool) {
 		return http.StatusUnprocessableEntity, "pickup_area_id or drop_area_id does not reference an existing area", true
 	case errors.Is(err, zones.ErrZoneInactive):
 		return http.StatusUnprocessableEntity, "the pickup or drop area's zone is not currently active", true
+	case errors.Is(err, zones.ErrAreaInactive):
+		return http.StatusUnprocessableEntity, "the pickup or drop area is not currently active", true
 	case errors.Is(err, ErrRateCardNotFound):
 		return http.StatusUnprocessableEntity, "no active rate card is configured for this order type and zone relationship", true
 	case errors.Is(err, ErrNoMatchingSlab):

@@ -202,7 +202,7 @@ func (f *fakeZonesRepo) CreateArea(_ context.Context, zoneID string, input zones
 		return zones.Area{}, zones.ErrZoneNotFound
 	}
 	f.nextID++
-	a := zones.Area{ID: fmt.Sprintf("fake-area-%d", f.nextID), Name: input.Name, ZoneID: zoneID, CreatedAt: time.Now()}
+	a := zones.Area{ID: fmt.Sprintf("fake-area-%d", f.nextID), Name: input.Name, ZoneID: zoneID, Active: true, CreatedAt: time.Now()}
 	f.areasByID[a.ID] = a
 	return a, nil
 }
@@ -231,6 +231,9 @@ func (f *fakeZonesRepo) UpdateArea(_ context.Context, areaID string, update zone
 		return zones.Area{}, zones.ErrAreaNotFound
 	}
 	a.Name = update.Name
+	if update.Active != nil {
+		a.Active = *update.Active
+	}
 	f.areasByID[areaID] = a
 	return a, nil
 }

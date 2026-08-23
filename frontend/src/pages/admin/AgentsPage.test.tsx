@@ -32,9 +32,117 @@ function mockAdminAuth() {
   } as AuthContextValue)
 }
 
+const detailAgent = {
+  id: 'a1',
+  user_id: 'u1',
+  full_name: 'Detail Agent',
+  email: 'detail@example.com',
+  phone: '+1 555-0100',
+  availability: 'AVAILABLE',
+  current_lat: null,
+  current_lng: null,
+  current_zone_id: 'zone-1',
+  location_updated_at: null,
+  last_assigned_at: null,
+  active: true,
+  created_at: '2026-01-01T00:00:00Z',
+}
+
+const zone1 = { id: 'zone-1', name: 'North Zone', active: true, created_at: '2026-01-01T00:00:00Z' }
+
+const assignedOrder = {
+  id: 'order-1',
+  customer_id: 'cust-1',
+  order_type: 'B2C',
+  payment_type: 'COD',
+  zone_relationship: 'INTRA',
+  final_amount: 55,
+  status: 'ASSIGNED',
+  created_at: '2026-01-02T00:00:00Z',
+}
+
+function detailFetchRouter() {
+  return vi.fn((input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url === '/api/v1/agents') return Promise.resolve(jsonResponse(200, [detailAgent]))
+    if (url === '/api/v1/zones') return Promise.resolve(jsonResponse(200, [zone1]))
+    if (url === '/api/v1/orders?agent=a1') return Promise.resolve(jsonResponse(200, [assignedOrder]))
+    if (url === '/api/v1/agents/a1/active') return Promise.resolve(jsonResponse(200, { ...detailAgent, active: false }))
+    return Promise.reject(new Error(`unexpected fetch: ${url}`))
+  })
+}
+
 describe('AgentsPage', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
+  })
+
+  it('shows agent detail, resolved zone name, and orders on selection', async () => {
+    mockAdminAuth()
+    vi.stubGlobal('fetch', detailFetchRouter())
+
+    render(
+      <MemoryRouter>
+        <AgentsPage />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText('Detail Agent')).toBeTruthy())
+    fireEvent.click(screen.getByText('Detail Agent'))
+
+    await waitFor(() => expect(screen.getByText('North Zone')).toBeTruthy())
+    // "detail@example.com" appears both in the list row and the detail
+    // pane — assert presence, not a single unique match.
+    expect(screen.getAllByText('detail@example.com').length).toBeGreaterThan(0)
+    expect(screen.getByText('+1 555-0100')).toBeTruthy()
+
+    await waitFor(() => expect(screen.getByText(/B2C · order-1/)).toBeTruthy())
+    expect(screen.getByText('₹55.00')).toBeTruthy()
+  })
+
+  it('deactivates and reflects the new state in both the list and detail pane', async () => {
+    mockAdminAuth()
+    vi.stubGlobal('fetch', detailFetchRouter())
+
+    render(
+      <MemoryRouter>
+        <AgentsPage />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText('Detail Agent')).toBeTruthy())
+    fireEvent.click(screen.getByText('Detail Agent'))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Deactivate' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Deactivate' }))
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Activate' })).toBeTruthy())
+    expect(screen.getAllByText('Inactive').length).toBeGreaterThan(0)
+  })
+
+  it('shows the empty-orders state when the agent has no assigned orders', async () => {
+    mockAdminAuth()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input)
+        if (url === '/api/v1/agents') return Promise.resolve(jsonResponse(200, [detailAgent]))
+        if (url === '/api/v1/zones') return Promise.resolve(jsonResponse(200, [zone1]))
+        if (url === '/api/v1/orders?agent=a1') return Promise.resolve(jsonResponse(200, []))
+        return Promise.reject(new Error(`unexpected fetch: ${url}`))
+      }),
+    )
+
+    render(
+      <MemoryRouter>
+        <AgentsPage />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText('Detail Agent')).toBeTruthy())
+    fireEvent.click(screen.getByText('Detail Agent'))
+
+    await waitFor(() => expect(screen.getByText('No orders currently or most-recently assigned to this agent.')).toBeTruthy())
   })
 
   it('loads and displays the agent list', async () => {

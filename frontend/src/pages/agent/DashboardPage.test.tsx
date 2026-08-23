@@ -51,6 +51,18 @@ function mockAuth() {
   } as AuthContextValue)
 }
 
+// Routes /agents/me to the given profile and /zones to an empty list by
+// default — most tests don't care about zone names, only
+// TestDashboardPage_ResolvesCurrentZoneName below overrides the zones
+// list.
+function fetchRouter(profile: unknown, zones: unknown[] = []) {
+  return vi.fn((input: RequestInfo | URL) => {
+    const url = String(input)
+    if (url === '/api/v1/zones') return Promise.resolve(jsonResponse(200, zones))
+    return Promise.resolve(jsonResponse(200, profile))
+  })
+}
+
 describe('agent DashboardPage', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
@@ -58,7 +70,7 @@ describe('agent DashboardPage', () => {
 
   it('renders a personalized greeting and links to assigned deliveries and availability/location', async () => {
     mockAuth()
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, agentProfile())))
+    vi.stubGlobal('fetch', fetchRouter(agentProfile()))
 
     render(
       <MemoryRouter>
@@ -76,7 +88,7 @@ describe('agent DashboardPage', () => {
 
   it('shows no customer- or admin-only dashboard content', async () => {
     mockAuth()
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, agentProfile())))
+    vi.stubGlobal('fetch', fetchRouter(agentProfile()))
 
     render(
       <MemoryRouter>
@@ -91,9 +103,23 @@ describe('agent DashboardPage', () => {
     await waitFor(() => expect(screen.getByText('AVAILABLE')).toBeTruthy())
   })
 
-  it("shows the agent's current zone status", async () => {
+  it("shows the agent's current zone name, resolved against the zone list", async () => {
     mockAuth()
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, agentProfile({ current_zone_id: 'zone-1' }))))
+    const zone = { id: 'zone-1', name: 'North Zone', active: true, created_at: '2026-01-01T00:00:00Z' }
+    vi.stubGlobal('fetch', fetchRouter(agentProfile({ current_zone_id: 'zone-1' }), [zone]))
+
+    render(
+      <MemoryRouter>
+        <DashboardPage />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText('North Zone')).toBeTruthy())
+  })
+
+  it('shows "Set" as a fallback when the zone list has not loaded the matching zone', async () => {
+    mockAuth()
+    vi.stubGlobal('fetch', fetchRouter(agentProfile({ current_zone_id: 'zone-1' }), []))
 
     render(
       <MemoryRouter>
@@ -102,5 +128,18 @@ describe('agent DashboardPage', () => {
     )
 
     await waitFor(() => expect(screen.getByText('Set')).toBeTruthy())
+  })
+
+  it('shows "Not set" when the agent has no current zone', async () => {
+    mockAuth()
+    vi.stubGlobal('fetch', fetchRouter(agentProfile({ current_zone_id: null })))
+
+    render(
+      <MemoryRouter>
+        <DashboardPage />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByText('Not set')).toBeTruthy())
   })
 })

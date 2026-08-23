@@ -174,6 +174,74 @@ func GetMyAgentHandler(repo Repository) http.HandlerFunc {
 	}
 }
 
+// GetAgentHandler handles GET /api/v1/agents/{id} (admin-only) — a
+// single-agent detail lookup, reusing the same agentResponse shape
+// ListAgentsHandler already produces per-item. Needed for the admin
+// Agents page to show one agent's own detail pane (zone, availability,
+// active state) without loading the entire agent list into that view.
+func GetAgentHandler(repo Repository) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		agentID := chi.URLParam(r, "id")
+
+		agent, err := repo.FindByID(r.Context(), agentID)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				server.WriteError(w, http.StatusNotFound, "agent not found")
+				return
+			}
+			slog.Error("agent lookup failed", "error", err)
+			server.WriteError(w, http.StatusInternalServerError, "could not load agent")
+			return
+		}
+
+		server.WriteJSON(w, http.StatusOK, toAgentResponse(agent))
+	}
+}
+
+type updateActiveRequest struct {
+	Active *bool `json:"active"`
+}
+
+// UpdateActiveHandler handles PUT /api/v1/agents/{id}/active (admin-only).
+// Unlike UpdateAvailability/UpdateLocation/UpdateZone, this is never
+// self-service — an agent cannot deactivate or reactivate their own
+// account, matching the ADMIN-only scope CreateAgentHandler already
+// establishes for agent lifecycle management. Active is a required
+// pointer field (not optional/omittable) since this endpoint does
+// exactly one thing, unlike zones.UpdateZoneHandler/rates.UpdateRateCard
+// which combine rename+active in a single call and use a nil-pointer to
+// mean "leave unchanged".
+func UpdateActiveHandler(repo Repository) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		agentID := chi.URLParam(r, "id")
+
+		var req updateActiveRequest
+		dec := json.NewDecoder(r.Body)
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&req); err != nil {
+			server.WriteError(w, http.StatusUnprocessableEntity, "invalid request body")
+			return
+		}
+		if req.Active == nil {
+			server.WriteError(w, http.StatusUnprocessableEntity, "active is required")
+			return
+		}
+
+		updated, err := repo.UpdateActive(r.Context(), agentID, *req.Active)
+		if err != nil {
+			if errors.Is(err, ErrNotFound) {
+				server.WriteError(w, http.StatusNotFound, "agent not found")
+				return
+			}
+			slog.Error("agent active update failed", "error", err)
+			server.WriteError(w, http.StatusInternalServerError, "could not update agent")
+			return
+		}
+
+		server.WriteJSON(w, http.StatusOK, toAgentResponse(updated))
+	}
+}
+
 type updateAvailabilityRequest struct {
 	Availability string `json:"availability"`
 }
