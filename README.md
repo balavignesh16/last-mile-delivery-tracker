@@ -26,6 +26,268 @@ The backend's free-tier instance spins down after inactivity — the
 first request after a quiet period can take 30–60 seconds to wake it
 back up.
 
+## System & Database Design
+
+Every diagram below is derived directly from the real schema
+(`backend/migrations/`) and the real implementation
+(`internal/tracking/statemachine.go`, `internal/assignment/candidate.go`,
+`internal/rates/pricing.go`) — not an idealized version of the system.
+Each module's own doc under [`docs/`](docs/) covers the full design
+reasoning; this section is the at-a-glance map, and doubles as this
+project's database-schema deliverable.
+
+### Database schema
+
+```mermaid
+erDiagram
+    USERS {
+        uuid id PK
+        string email UK
+        string role
+        string full_name
+        string phone
+    }
+    DELIVERY_AGENTS {
+        uuid id PK
+        uuid user_id FK
+        string availability
+        uuid current_zone_id FK
+        double current_lat
+        double current_lng
+        timestamp last_assigned_at
+        boolean active
+    }
+    ZONES {
+        uuid id PK
+        string name UK
+        boolean active
+    }
+    AREAS {
+        uuid id PK
+        uuid zone_id FK
+        string name
+        boolean active
+    }
+    RATE_CARDS {
+        uuid id PK
+        string order_type
+        string zone_relationship
+        numeric cod_surcharge
+        boolean active
+    }
+    RATE_CARD_SLABS {
+        uuid id PK
+        uuid rate_card_id FK
+        numeric min_weight
+        numeric max_weight
+        numeric price
+    }
+    ORDERS {
+        uuid id PK
+        uuid customer_id FK
+        uuid created_by FK
+        uuid pickup_area_id FK
+        uuid drop_area_id FK
+        uuid pickup_zone_id FK
+        uuid drop_zone_id FK
+        uuid rate_card_id FK
+        uuid assigned_agent_id FK
+        string order_type
+        string payment_type
+        numeric chargeable_weight_kg
+        numeric final_amount
+        string status
+    }
+    ORDER_TRACKING_EVENTS {
+        uuid id PK
+        uuid order_id FK
+        uuid actor_id FK
+        string actor_role
+        string previous_status
+        string new_status
+        timestamp created_at
+    }
+    RESCHEDULE_REQUESTS {
+        uuid id PK
+        uuid order_id FK
+        uuid requested_by FK
+        string requested_by_role
+        date requested_date
+    }
+    NOTIFICATIONS {
+        uuid id PK
+        uuid tracking_event_id FK
+        uuid order_id FK
+        string event
+        string channel
+        string status
+    }
+
+    USERS ||--o| DELIVERY_AGENTS : "has agent profile"
+    ZONES ||--o{ AREAS : contains
+    ZONES |o--o{ DELIVERY_AGENTS : "current zone"
+    RATE_CARDS ||--o{ RATE_CARD_SLABS : defines
+    USERS ||--o{ ORDERS : "places (customer)"
+    USERS ||--o{ ORDERS : "created by"
+    AREAS ||--o{ ORDERS : "pickup area"
+    AREAS ||--o{ ORDERS : "drop area"
+    ZONES ||--o{ ORDERS : "pickup zone"
+    ZONES ||--o{ ORDERS : "drop zone"
+    RATE_CARDS ||--o{ ORDERS : "priced by"
+    DELIVERY_AGENTS |o--o{ ORDERS : "assigned to"
+    ORDERS ||--o{ ORDER_TRACKING_EVENTS : "status history"
+    USERS ||--o{ ORDER_TRACKING_EVENTS : actor
+    ORDERS ||--o{ RESCHEDULE_REQUESTS : "reschedule requests"
+    USERS ||--o{ RESCHEDULE_REQUESTS : "requested by"
+    ORDER_TRACKING_EVENTS ||--o{ NOTIFICATIONS : triggers
+    ORDERS ||--o{ NOTIFICATIONS : "for order"
+```
+
+Only the fields relevant to the project's own logic are shown; every
+`CHECK`/`UNIQUE` constraint and the remaining audit columns are in the
+migration files themselves under `backend/migrations/`.
+
+### System architecture
+
+```mermaid
+flowchart TD
+    FE["React + TypeScript frontend<br/>(Vite build, hosted on Vercel)"]
+    CORS["CORS allow-list<br/>(internal/server/cors.go)"]
+    ROUTER["Go HTTP API<br/>(chi router, internal/server)"]
+    AUTHZ["Authentication / RBAC<br/>(JWT + role middleware, internal/auth)"]
+    MODULES["Domain modules<br/>agents, zones, rates, orders,<br/>tracking, assignment, rescheduling"]
+    DB[("PostgreSQL")]
+    NOTIF["Notification service<br/>(internal/notifications,<br/>post-commit hook)"]
+    EMAIL["Email provider<br/>(Resend, opt-in / log fallback)"]
+    SMS["SMS provider<br/>(Twilio, opt-in / log fallback)"]
+
+    FE -->|HTTPS / JSON| CORS
+    CORS --> ROUTER
+    ROUTER --> AUTHZ
+    AUTHZ --> MODULES
+    MODULES --> DB
+    MODULES -.->|hook, no import cycle| NOTIF
+    NOTIF --> EMAIL
+    NOTIF --> SMS
+```
+
+One deployable Go binary, one PostgreSQL database, no microservices, no
+queue, no cache layer. The notification service is never imported by the
+modules that trigger it — each one calls a small callback function
+(`TransitionHook`/`OrderCreatedHook`) it was handed at startup in
+`cmd/server/main.go`, which is what keeps the dotted line from becoming a
+real import cycle.
+
+### Order lifecycle (state machine)
+
+```mermaid
+stateDiagram-v2
+    [*] --> CREATED
+    CREATED --> ASSIGNED : ADMIN
+    ASSIGNED --> PICKED_UP : ADMIN or AGENT
+    PICKED_UP --> IN_TRANSIT : ADMIN or AGENT
+    IN_TRANSIT --> OUT_FOR_DELIVERY : ADMIN or AGENT
+    OUT_FOR_DELIVERY --> DELIVERED : ADMIN or AGENT
+    OUT_FOR_DELIVERY --> FAILED : ADMIN or AGENT
+    FAILED --> RESCHEDULED : ADMIN
+    RESCHEDULED --> ASSIGNED : ADMIN
+    DELIVERED --> [*]
+```
+
+This is the complete, closed edge set from `legalTransitions` in
+`internal/tracking/statemachine.go` — any `(from, to)` pair not drawn
+above is rejected for every role, including ADMIN; there is no
+"jump to any status" override anywhere in the code. Role labels come
+from that file's `edgeAuthorizedRoles` matrix. One nuance: `FAILED ->
+RESCHEDULED` is ADMIN-only in this matrix, but a CUSTOMER can trigger it
+too — `internal/rescheduling` authorizes that request itself (order
+owner or admin) and then invokes this exact transition as a
+pre-authorized internal call, with the real caller's role still recorded
+faithfully in `order_tracking_events.actor_role`. See
+[`docs/failed-delivery.md`](docs/failed-delivery.md).
+
+### Auto-assignment flow
+
+```mermaid
+flowchart TD
+    A["Order"] --> B["Resolve pickup zone"]
+    B --> C["Load candidate agent pool"]
+    C --> D{"Eligible?<br/>active = true<br/>availability = AVAILABLE<br/>current_zone_id set"}
+    D -->|no| X["Excluded from pool"]
+    D -->|yes| E["Rank: same pickup zone<br/>before cross-zone"]
+    E --> F["Tie-break: oldest last_assigned_at first<br/>(never-assigned agents ranked first)"]
+    F --> G["Final tie-break: agent id ascending"]
+    G --> H["Top-ranked agent selected"]
+    H --> I["Same TransitionTx used by manual assign:<br/>order goes to ASSIGNED, agent goes to BUSY"]
+    C --> J["If the pool is empty after filtering"]
+    J --> K["No eligible candidate: assignment fails,<br/>never guesses or substitutes"]
+```
+
+This is `assignment.SelectCandidate` exactly (`internal/assignment/candidate.go`).
+There is no pickup coordinate anywhere in this schema (only agents carry
+`current_lat`/`current_lng`), so zone match is the only geographic
+signal available — a deliberate, documented choice, not a gap; see
+[`docs/assignment-engine.md`](docs/assignment-engine.md).
+
+### Rate calculation flow
+
+```mermaid
+flowchart TD
+    PA["Pickup area + drop area"] --> RZ["Resolve to zones"]
+    RZ --> REL["Determine INTRA or INTER"]
+    DIM["Length x breadth x height (cm)"] --> VOL["Volumetric weight =<br/>L x B x H / 5000"]
+    ACT["Actual weight (kg)"] --> CHG["Chargeable weight =<br/>higher of actual and volumetric"]
+    VOL --> CHG
+    REL --> CARD["Look up the one active rate card<br/>for this order_type + zone_relationship"]
+    CHG --> SLAB["Select the slab whose<br/>min/max weight band covers it"]
+    CARD --> SLAB
+    SLAB --> BASE["Base rate = slab price"]
+    BASE --> PAY{"Payment type is COD?"}
+    PAY -->|yes| ADD["Add the rate card's COD surcharge"]
+    PAY -->|no| NOADD["No surcharge added"]
+    ADD --> FINAL["Final amount"]
+    NOADD --> FINAL
+```
+
+This is `rates.CalculateQuote` exactly (`internal/rates/pricing.go`).
+`POST /orders/quote` and order creation both call this identical
+function — there is no second, separate pricing implementation to drift
+out of sync with it. See [`docs/rate-calculation.md`](docs/rate-calculation.md).
+
+### Engineering highlights
+
+Facts only, each verifiable directly against this repository:
+
+- **484 Go test functions** across 47 backend test files — unit,
+  integration (`-tags integration`, against a real PostgreSQL instance),
+  and end-to-end (`-tags e2e`, real router + real database) suites.
+- **228 frontend tests** across 30 files (Vitest + Testing Library).
+- **8 dedicated concurrency-race tests** proven against real concurrent
+  load on PostgreSQL, e.g. `TestConcurrentActivation_OnlyOneWins`,
+  `TestAssignmentConcurrency_SameAgentRacedByTwoOrders`,
+  `TestRescheduleConcurrency_DoesNotDeadlockWithAssignment`.
+- **CI on every push/PR** (`.github/workflows/ci.yml`): backend
+  `gofmt` / `go vet` / `go build` / `go test`, frontend `tsc` / `oxlint`
+  / `vitest` / `vite build`.
+- **OpenAPI contract test**
+  (`TestOpenAPIContract_DocumentedPathsMatchRealRoutes`) walks the real,
+  mounted router and diffs it against `docs/openapi.yaml`, so the API
+  document cannot silently drift from the real API.
+- **Immutable tracking history** — `order_tracking_events` is
+  append-only; no update or delete route exists for it anywhere in the
+  API (`TestTrackingEvents_NoUpdateOrDeleteRouteExists`).
+- **Actor-role attribution** — every tracking event and reschedule
+  request records not just who acted but what role they held
+  (`actor_role`, `requested_by_role`), so the UI shows "by an admin" vs.
+  "by the customer" instead of a raw id.
+- **Real email delivery** via Resend (opt-in, `EMAIL_PROVIDER=resend`)
+  and **real SMS delivery** via Twilio (opt-in, `SMS_PROVIDER=twilio`) —
+  both fail fast at startup if misconfigured, both default to a safe,
+  zero-credential log-based provider otherwise.
+- **Live deployment** — frontend on Vercel, backend + PostgreSQL on
+  Render, verified against a real cross-origin request (see "Live
+  Application" above).
+
 ## Current Status
 
 **Post-M12 hardening.** A full audit after M12 (see "Evaluation Matrix"
@@ -993,16 +1255,14 @@ last-mile-delivery-tracker/
 
 ## Architecture
 
-Modular monolith: twelve modules, one deployable Go backend, no
-microservices. Full module-by-module design, database schema, and API
-structure live in `docs/architecture.md` once enough modules exist to make
-that worth writing — for now, each module's own doc
-([`docs/authentication.md`](docs/authentication.md),
-[`docs/user-agent-management.md`](docs/user-agent-management.md),
-[`docs/zone-management.md`](docs/zone-management.md),
-[`docs/rate-configuration.md`](docs/rate-configuration.md)) covers its
-own design, and [`docs/api.md`](docs/api.md) is the running endpoint
-reference across all of them.
+Modular monolith: eight backend modules (`auth`, `agents`, `zones`,
+`rates`, `orders`, `tracking`, `assignment`, `rescheduling`) plus the
+`notifications` service, one deployable Go backend, no microservices. See
+"System & Database Design" near the top of this file for the ER diagram,
+architecture diagram, order lifecycle, auto-assignment flow, and rate
+calculation flow. Each module's own doc under [`docs/`](docs/) covers its
+own design in full, and [`docs/api.md`](docs/api.md) is the complete
+endpoint reference across all of them.
 
 Two source-document points worth recording now, since they affect the
 whole project's submission, not just one module:
@@ -1016,10 +1276,11 @@ whole project's submission, not just one module:
   repository fulfills the ZIP deliverable.
 - **Admin status override.** The assignment requires invalid order-status
   jumps to be rejected, and separately allows admin to override order
-  status. Both requirements are honored through two endpoints — a strict
-  normal-lifecycle endpoint and a separate, bounded admin-override
-  endpoint — documented in full in `docs/order-lifecycle.md` once M08
-  lands.
+  status. Both requirements are honored through the same
+  `POST /orders/:id/status` endpoint: `internal/tracking/statemachine.go`'s
+  transition table rejects any illegal jump for every role including
+  ADMIN, while ADMIN is the one role authorized on every legal edge — see
+  [`docs/order-tracking.md`](docs/order-tracking.md).
 
 ## Evaluation Matrix
 
