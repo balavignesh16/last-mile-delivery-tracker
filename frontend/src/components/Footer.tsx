@@ -8,22 +8,22 @@ export function Footer() {
 
   return (
     <footer className="border-t border-navy-100 bg-white">
-      <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-6 py-8 text-sm text-slate-500 sm:flex-row">
-        <div className="flex items-center gap-2 font-semibold text-navy-900">
-          <span className="flex h-6 w-6 items-center justify-center rounded-md bg-navy-600 text-white">
-            <Truck className="h-3.5 w-3.5" aria-hidden="true" />
+      <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-5 px-6 py-10 text-sm text-slate-500 sm:flex-row">
+        <div className="flex items-center gap-2.5 font-semibold text-navy-900">
+          <span className="flex h-7 w-7 items-center justify-center rounded-md bg-navy-600 text-white">
+            <Truck className="h-4 w-4" aria-hidden="true" />
           </span>
           Last-Mile Delivery Tracker
         </div>
 
-        <p>Pricing, assignment, and tracking for every delivery, end to end.</p>
+        <p className="text-center sm:text-left">Pricing, assignment, and tracking for every delivery, end to end.</p>
 
         {status === 'authenticated' && user ? (
           <Link to={dashboardPathForRole(user.role)} className="font-medium text-navy-600 hover:text-navy-700">
             Go to dashboard
           </Link>
         ) : (
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-5">
             <Link to="/login" className="font-medium text-navy-600 hover:text-navy-700">
               Sign In
             </Link>

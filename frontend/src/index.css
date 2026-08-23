@@ -27,6 +27,16 @@
 body {
   font-family: var(--font-sans);
   background-color: var(--color-navy-50);
+  /* Full-bleed sections (Home.tsx's hero/CTA bands) use `100vw` to break
+     out of the app's centered max-w-6xl column — but 100vw measures the
+     viewport including the vertical scrollbar's reserved width, making
+     those sections a few pixels wider than the visible page on browsers
+     with a classic (space-reserving) scrollbar. That sliver never
+     contains visible content, only background color, so clipping it
+     here is the standard fix — it does not hide anything a visitor
+     would otherwise see, it just stops the whole document from
+     becoming horizontally scrollable over a few pixels of nothing. */
+  overflow-x: hidden;
 }
 
 /* A visible, consistent keyboard-focus ring on every interactive
