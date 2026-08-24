@@ -139,27 +139,37 @@ dropdown populated from `GET /zones` (read access widened to
 `docs/zone-management.md`), not a location derived from
 `current_lat`/`current_lng`. That's deliberate, not a shortcut: there is
 no zone/area boundary geometry anywhere in this schema (zones and areas
-are plain named rows, no polygons), and no pickup coordinate on an order
-either — only a pickup zone/area — so there is nothing to geofence an
+are plain named rows, no polygons), so there is nothing to geofence an
 agent's raw lat/lng against. See `docs/assignment-engine.md`'s
-"Auto-assignment ranking" section for why true geographic ranking was
-never implemented; this endpoint fixes the *reachability* of the
-zone-based ranking that already exists, not that separate, larger gap.
+"Auto-assignment ranking" section for why zone-boundary geofencing isn't
+offered; this endpoint fixes the *reachability* of the zone-based
+ranking that already exists, not that separate concern. (Post-M09, an
+order's pickup *area* can optionally carry its own coordinates —
+`areas.latitude`/`longitude`, migration `0016` — which auto-assignment's
+ranking does resolve `current_lat`/`current_lng` against when both are
+set; see below.)
 
 ## Forward compatibility with M09
 
-Fields M09's candidate-selection algorithm will read are already present
+Fields M09's candidate-selection algorithm reads are already present
 and typed for that purpose: `availability` (constrained to exactly the
-three values M09 will filter on), `active`, `current_zone_id` (now
-writable — see above), `current_lat`/`current_lng` (`float64`, matching
-Haversine-distance arithmetic, though nothing in this project resolves a
-pickup point against them — see `docs/assignment-engine.md`), and
+three values M09 filters on), `active`, `current_zone_id` (now
+writable — see above), `current_lat`/`current_lng` (`float64` —
+post-M09, resolved against a pickup area's own optional coordinates via
+`internal/geo.HaversineKM`, falling back to zone-based ranking when
+either side lacks a coordinate; see `docs/assignment-engine.md`), and
 `last_assigned_at` (a natural tie-break signal — earliest
 `last_assigned_at` first, for fair round-robin; M03 does not write to
 this field — that's M09's). `location_updated_at` is always set from the
 database's own clock (`now()`), never a client-supplied value, so it can
-be trusted later for staleness checks without re-verifying it.
+be trusted later for staleness checks without re-verifying it. The
+agent-facing form that writes `current_lat`/`current_lng` (M03's own
+`PUT .../location`, surfaced on the frontend's Operations page) can
+optionally be pre-filled from the browser's native Geolocation API —
+still a plain manual `PUT` underneath, no change to this endpoint
+itself.
 
 M03 explicitly does **not** implement: `SELECT ... FOR UPDATE SKIP
-LOCKED`, Haversine ranking, or either assignment path (manual or
-automatic) — those are M09's algorithm, not this module's data layer.
+LOCKED`, the ranking/distance algorithm itself, or either assignment
+path (manual or automatic) — those are M09's, not this module's data
+layer.
