@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"lastmiletracker/internal/geo"
 	"lastmiletracker/internal/server"
 )
 
@@ -33,11 +34,13 @@ func toZoneResponse(z Zone) zoneResponse {
 }
 
 type areaResponse struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	ZoneID    string `json:"zone_id"`
-	Active    bool   `json:"active"`
-	CreatedAt string `json:"created_at"`
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	ZoneID    string   `json:"zone_id"`
+	Active    bool     `json:"active"`
+	Latitude  *float64 `json:"latitude"`
+	Longitude *float64 `json:"longitude"`
+	CreatedAt string   `json:"created_at"`
 }
 
 func toAreaResponse(a Area) areaResponse {
@@ -46,8 +49,29 @@ func toAreaResponse(a Area) areaResponse {
 		Name:      a.Name,
 		ZoneID:    a.ZoneID,
 		Active:    a.Active,
+		Latitude:  a.Latitude,
+		Longitude: a.Longitude,
 		CreatedAt: a.CreatedAt.Format(time.RFC3339),
 	}
+}
+
+// validateOptionalCoordinates enforces "both provided or neither" for
+// an area's optional latitude/longitude, then delegates the actual
+// range/finite-number check to geo.ValidateCoordinates — the same
+// shared core internal/agents' own (required-pair) coordinate
+// validation delegates to, so the range rules are defined in exactly
+// one place. Unlike an agent's location, an area's coordinates are
+// genuinely optional configuration (most areas will have none until an
+// admin sets real ones), so "neither provided" is valid here in a way
+// it deliberately is not for internal/agents.validateCoordinates.
+func validateOptionalCoordinates(lat, lng *float64) string {
+	if lat == nil && lng == nil {
+		return ""
+	}
+	if lat == nil || lng == nil {
+		return "latitude and longitude must both be provided together"
+	}
+	return geo.ValidateCoordinates(*lat, *lng)
 }
 
 // validateName is shared by zone and area name validation — both have
@@ -202,6 +226,9 @@ func UpdateZoneHandler(repo Repository) http.HandlerFunc {
 // anyway.
 type createAreaRequest struct {
 	Name string `json:"name"`
+	// Latitude/Longitude are optional — see CreateAreaInput's doc.
+	Latitude  *float64 `json:"latitude"`
+	Longitude *float64 `json:"longitude"`
 }
 
 // CreateAreaHandler handles POST /api/v1/zones/{zoneID}/areas
@@ -234,8 +261,12 @@ func CreateAreaHandler(repo Repository) http.HandlerFunc {
 			server.WriteError(w, http.StatusUnprocessableEntity, problem)
 			return
 		}
+		if problem := validateOptionalCoordinates(req.Latitude, req.Longitude); problem != "" {
+			server.WriteError(w, http.StatusUnprocessableEntity, problem)
+			return
+		}
 
-		created, err := repo.CreateArea(r.Context(), zoneID, CreateAreaInput{Name: name})
+		created, err := repo.CreateArea(r.Context(), zoneID, CreateAreaInput{Name: name, Latitude: req.Latitude, Longitude: req.Longitude})
 		if err != nil {
 			if errors.Is(err, ErrAreaNameTaken) {
 				server.WriteError(w, http.StatusConflict, err.Error())
@@ -288,9 +319,11 @@ func ListAreasHandler(repo Repository) http.HandlerFunc {
 
 type updateAreaRequest struct {
 	Name string `json:"name"`
-	// Active is a pointer so an omitted field means "leave unchanged" —
-	// see AreaUpdate's doc.
-	Active *bool `json:"active"`
+	// Active/Latitude/Longitude are pointers so an omitted field means
+	// "leave unchanged" — see AreaUpdate's doc.
+	Active    *bool    `json:"active"`
+	Latitude  *float64 `json:"latitude"`
+	Longitude *float64 `json:"longitude"`
 }
 
 // UpdateAreaHandler handles PUT /api/v1/zones/{zoneID}/areas/{areaID}
@@ -335,8 +368,12 @@ func UpdateAreaHandler(repo Repository) http.HandlerFunc {
 			server.WriteError(w, http.StatusUnprocessableEntity, problem)
 			return
 		}
+		if problem := validateOptionalCoordinates(req.Latitude, req.Longitude); problem != "" {
+			server.WriteError(w, http.StatusUnprocessableEntity, problem)
+			return
+		}
 
-		updated, err := repo.UpdateArea(r.Context(), areaID, AreaUpdate{Name: name, Active: req.Active})
+		updated, err := repo.UpdateArea(r.Context(), areaID, AreaUpdate{Name: name, Active: req.Active, Latitude: req.Latitude, Longitude: req.Longitude})
 		if err != nil {
 			if errors.Is(err, ErrAreaNameTaken) {
 				server.WriteError(w, http.StatusConflict, err.Error())

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"lastmiletracker/internal/agents"
+	"lastmiletracker/internal/geo"
 )
 
 // ErrNoEligibleCandidate is returned when no delivery agent satisfies
@@ -34,11 +35,18 @@ var ErrNoEligibleCandidate = errors.New("no eligible delivery agent is available
 // (mirrors rates.SelectSlab's and tracking.IsValidTransition's
 // precedent: the decision function is pure, the database plumbing is a
 // separate, integration-tested concern).
+// Latitude/Longitude are the agent's own current_lat/current_lng
+// (internal/agents) — optional (nullable in the database), used only
+// for ranking, never eligibility (see IsEligible: a candidate with no
+// coordinates is still eligible, it just can't be ranked by distance
+// and falls back to zone-based ranking — see rankLess).
 type Candidate struct {
 	AgentID        string
 	Active         bool
 	Availability   agents.Availability
 	CurrentZoneID  *string
+	Latitude       *float64
+	Longitude      *float64
 	LastAssignedAt *time.Time
 }
 
@@ -53,22 +61,31 @@ func IsEligible(c Candidate) bool {
 	return c.Active && c.Availability == agents.AvailabilityAvailable && c.CurrentZoneID != nil
 }
 
-// SelectCandidate implements the finalized M09 deterministic ranking:
+// SelectCandidate implements the finalized M09 deterministic ranking,
+// extended with real-distance ranking when it's actually computable:
 //  1. active = true
 //  2. availability = AVAILABLE
 //  3. a usable current_zone_id exists
-//  4. same-zone agents ranked ahead of cross-zone agents (cross-zone is
-//     allowed, never excluded — there is no pickup coordinate anywhere
-//     in this schema, so true geographic distance is not computable;
-//     zone-match is the only ranking signal available)
-//  5. last_assigned_at ascending, NULL first (fair rotation — agents
+//  4. if this candidate AND the pickup point both have known
+//     coordinates, rank by real Haversine distance ascending (nearer
+//     wins) — a candidate with a computable distance always outranks
+//     one without, since a real distance is strictly more informative
+//     than the zone-match proxy below
+//  5. otherwise (or on an exact distance tie), same-zone agents rank
+//     ahead of cross-zone agents (cross-zone is allowed, never excluded
+//     — this is the fallback for when precise coordinates aren't
+//     available, exactly as the source blueprint describes)
+//  6. last_assigned_at ascending, NULL first (fair rotation — agents
 //     never assigned, or idle longest, are preferred)
-//  6. agent id ascending — the final, unconditional tiebreaker that
+//  7. agent id ascending — the final, unconditional tiebreaker that
 //     guarantees this function can never be non-deterministic
+//
+// pickupLat/pickupLng are the pickup area's own coordinates (nil, nil
+// if that area has none set) — see internal/zones.Area.
 //
 // Returns ErrNoEligibleCandidate if the pool has no eligible member —
 // never a guess, never a fallback substitution.
-func SelectCandidate(candidates []Candidate, pickupZoneID string) (Candidate, error) {
+func SelectCandidate(candidates []Candidate, pickupZoneID string, pickupLat, pickupLng *float64) (Candidate, error) {
 	eligible := make([]Candidate, 0, len(candidates))
 	for _, c := range candidates {
 		if IsEligible(c) {
@@ -80,17 +97,43 @@ func SelectCandidate(candidates []Candidate, pickupZoneID string) (Candidate, er
 	}
 
 	sort.Slice(eligible, func(i, j int) bool {
-		return rankLess(eligible[i], eligible[j], pickupZoneID)
+		return rankLess(eligible[i], eligible[j], pickupZoneID, pickupLat, pickupLng)
 	})
 	return eligible[0], nil
 }
 
-// rankLess implements steps 4-6 of SelectCandidate's ranking as a
+// distanceToPickupKM returns the Haversine distance in kilometres from
+// c's current location to the pickup point, or nil if either side lacks
+// a coordinate — nil is the "not computable" signal rankLess and
+// AutoAssign both check for, never a fabricated/zero distance standing
+// in for "unknown".
+func distanceToPickupKM(c Candidate, pickupLat, pickupLng *float64) *float64 {
+	if c.Latitude == nil || c.Longitude == nil || pickupLat == nil || pickupLng == nil {
+		return nil
+	}
+	d := geo.HaversineKM(*c.Latitude, *c.Longitude, *pickupLat, *pickupLng)
+	return &d
+}
+
+// rankLess implements steps 4-7 of SelectCandidate's ranking as a
 // strict total order (never returns true for both (a,b) and (b,a)
 // unless a and b are the same agent), which is what actually makes
 // sort.Slice's result deterministic regardless of the input's original
 // order.
-func rankLess(a, b Candidate, pickupZoneID string) bool {
+func rankLess(a, b Candidate, pickupZoneID string, pickupLat, pickupLng *float64) bool {
+	aDist := distanceToPickupKM(a, pickupLat, pickupLng)
+	bDist := distanceToPickupKM(b, pickupLat, pickupLng)
+	switch {
+	case aDist != nil && bDist != nil && *aDist != *bDist:
+		return *aDist < *bDist
+	case (aDist != nil) != (bDist != nil):
+		// Exactly one candidate has a real, computable distance — it
+		// always outranks the other, regardless of zone match.
+		return aDist != nil
+	}
+	// Neither has a computable distance, or both do and are exactly
+	// tied on it: fall through to the zone-based signal.
+
 	aSame := a.CurrentZoneID != nil && *a.CurrentZoneID == pickupZoneID
 	bSame := b.CurrentZoneID != nil && *b.CurrentZoneID == pickupZoneID
 	if aSame != bSame {

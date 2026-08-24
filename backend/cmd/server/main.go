@@ -126,7 +126,7 @@ func main() {
 		emailProvider, smsProvider,
 	)
 
-	assignmentRepo := assignment.NewPostgresRepository(pool, agentsRepo, ordersRepo, trackingRepo, notificationsService.NotifyTransition)
+	assignmentRepo := assignment.NewPostgresRepository(pool, agentsRepo, ordersRepo, trackingRepo, zonesRepo, notificationsService.NotifyTransition)
 	reschedulingRepo := rescheduling.NewPostgresRepository(pool, trackingRepo, notificationsService.NotifyTransition)
 
 	if err := auth.SeedDemoUsers(ctx, usersRepo, logger); err != nil {

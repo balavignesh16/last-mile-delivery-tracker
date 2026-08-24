@@ -63,9 +63,19 @@ async function chooseZone(optionName: string) {
   fireEvent.click(screen.getByRole('option', { name: optionName }))
 }
 
+// jsdom has no navigator.geolocation by default, so tests that don't
+// call this see the same "unsupported" state a real old browser would.
+function stubGeolocation(getCurrentPosition: (success: PositionCallback, error?: PositionErrorCallback) => void) {
+  Object.defineProperty(globalThis.navigator, 'geolocation', {
+    value: { getCurrentPosition },
+    configurable: true,
+  })
+}
+
 describe('OperationsPage', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
+    Object.defineProperty(globalThis.navigator, 'geolocation', { value: undefined, configurable: true })
   })
 
   it('loads the agent profile and shows current availability', async () => {
@@ -157,6 +167,74 @@ describe('OperationsPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /update location/i }))
 
     await waitFor(() => expect(screen.getByText('Location updated.')).toBeTruthy())
+  })
+
+  it('does not render the "Use my current location" button when geolocation is unsupported', async () => {
+    mockAgentAuth()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, agentProfile())))
+
+    render(
+      <MemoryRouter>
+        <OperationsPage />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByLabelText('Latitude')).toBeTruthy())
+    expect(screen.queryByRole('button', { name: /use my current location/i })).toBeNull()
+  })
+
+  it('fills latitude/longitude from a successful location read, without submitting', async () => {
+    mockAgentAuth()
+    stubGeolocation((success) => {
+      success({ coords: { latitude: 12.9716, longitude: 77.5946 } } as GeolocationPosition)
+    })
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/agents/me')) return jsonResponse(200, agentProfile())
+      if (url.endsWith('/zones')) return zonesResponse()
+      if (url.includes('/location') && init?.method === 'PUT') {
+        throw new Error('should not have submitted the location just from filling it via GPS')
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <MemoryRouter>
+        <OperationsPage />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /use my current location/i })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /use my current location/i }))
+
+    await waitFor(() => expect((screen.getByLabelText('Latitude') as HTMLInputElement).value).toBe('12.9716'))
+    expect((screen.getByLabelText('Longitude') as HTMLInputElement).value).toBe('77.5946')
+  })
+
+  it('shows a friendly error when location permission is denied', async () => {
+    mockAgentAuth()
+    stubGeolocation((_success, error) => {
+      error?.({
+        code: 1,
+        PERMISSION_DENIED: 1,
+        POSITION_UNAVAILABLE: 2,
+        TIMEOUT: 3,
+        message: 'User denied Geolocation',
+      } as GeolocationPositionError)
+    })
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse(200, agentProfile())))
+
+    render(
+      <MemoryRouter>
+        <OperationsPage />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /use my current location/i })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /use my current location/i }))
+
+    await waitFor(() => expect(screen.getByText('Location permission was denied. Enter your coordinates manually below.')).toBeTruthy())
   })
 
   it('loads the zone list and submits a zone update', async () => {

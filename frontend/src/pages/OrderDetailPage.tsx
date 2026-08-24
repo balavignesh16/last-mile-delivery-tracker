@@ -205,7 +205,11 @@ export function OrderDetailPage() {
     try {
       const updated = await autoAssignOrder(token, id)
       await refreshOrderAndTracking()
-      setAssignmentSuccess(`Order auto-assigned to agent ${updated.assigned_agent_id}.`)
+      const distanceNote =
+        updated.assignment.method === 'DISTANCE' && updated.assignment.distance_km !== undefined
+          ? ` (${updated.assignment.distance_km.toFixed(1)} km away, nearest available)`
+          : ' (nearest available by zone)'
+      setAssignmentSuccess(`Order auto-assigned to agent ${updated.assigned_agent_id}${distanceNote}.`)
     } catch (err) {
       setAssignmentError(err instanceof ApiError ? err.message : 'Could not auto-assign this order.')
     } finally {

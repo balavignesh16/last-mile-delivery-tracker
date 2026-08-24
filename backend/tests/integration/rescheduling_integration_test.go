@@ -54,7 +54,7 @@ func setupReschedulingTest(t *testing.T) (router http.Handler, usersRepo users.R
 	oRepo := orders.NewPostgresRepository(p)
 	tRepo := tracking.NewPostgresRepository(p)
 	aRepo := agents.NewPostgresRepository(p)
-	asRepo := assignment.NewPostgresRepository(p, aRepo, oRepo, tRepo, nil)
+	asRepo := assignment.NewPostgresRepository(p, aRepo, oRepo, tRepo, zRepo, nil)
 	rsRepo := rescheduling.NewPostgresRepository(p, tRepo, nil)
 	r := server.NewRouter(p, testLogger(),
 		auth.Mount(uRepo, agentsIntegrationJWTSecret),

@@ -222,6 +222,71 @@ describe('ZonesPage', () => {
     await waitFor(() => expect(screen.getByText('Suburb')).toBeTruthy())
   })
 
+  it('creates an area with coordinates and displays them', async () => {
+    mockAdminAuth()
+    let created: unknown = null
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/v1/zones') return jsonResponse(200, [existingZone])
+      if (url === '/api/v1/zones/z1/areas' && init?.method === 'POST') {
+        created = init.body ? JSON.parse(String(init.body)) : null
+        return jsonResponse(201, { id: 'a2', name: 'GeoArea', zone_id: 'z1', active: true, latitude: 12.9716, longitude: 77.5946, created_at: '2026-01-01T00:00:00Z' })
+      }
+      if (url === '/api/v1/zones/z1/areas') return jsonResponse(200, [])
+      return jsonResponse(200, [])
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <MemoryRouter>
+        <ZonesPage />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByRole('table')).toBeTruthy())
+    clickZoneRow('North Zone')
+    await waitFor(() => expect(screen.getByText('No areas in this zone yet.')).toBeTruthy())
+
+    fireEvent.change(screen.getByLabelText('New area name'), { target: { value: 'GeoArea' } })
+    fireEvent.change(screen.getByLabelText('Latitude (optional)'), { target: { value: '12.9716' } })
+    fireEvent.change(screen.getByLabelText('Longitude (optional)'), { target: { value: '77.5946' } })
+    fireEvent.click(screen.getByRole('button', { name: /add area/i }))
+
+    await waitFor(() => expect(screen.getByText('GeoArea')).toBeTruthy())
+    expect(screen.getByText('12.9716, 77.5946')).toBeTruthy()
+    expect(created).toMatchObject({ name: 'GeoArea', latitude: 12.9716, longitude: 77.5946 })
+  })
+
+  it('rejects an area with only latitude provided, before any request is sent', async () => {
+    mockAdminAuth()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/v1/zones') return jsonResponse(200, [existingZone])
+      if (url === '/api/v1/zones/z1/areas' && init?.method === 'POST') {
+        throw new Error('should not have posted an area with only one coordinate provided')
+      }
+      if (url === '/api/v1/zones/z1/areas') return jsonResponse(200, [])
+      return jsonResponse(200, [])
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <MemoryRouter>
+        <ZonesPage />
+      </MemoryRouter>,
+    )
+
+    await waitFor(() => expect(screen.getByRole('table')).toBeTruthy())
+    clickZoneRow('North Zone')
+    await waitFor(() => expect(screen.getByText('No areas in this zone yet.')).toBeTruthy())
+
+    fireEvent.change(screen.getByLabelText('New area name'), { target: { value: 'Partial' } })
+    fireEvent.change(screen.getByLabelText('Latitude (optional)'), { target: { value: '12.9716' } })
+    fireEvent.click(screen.getByRole('button', { name: /add area/i }))
+
+    await waitFor(() => expect(screen.getByText('Latitude and longitude must both be provided together.')).toBeTruthy())
+  })
+
   it('toggles a zone active state', async () => {
     mockAdminAuth()
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

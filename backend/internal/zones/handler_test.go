@@ -93,7 +93,7 @@ func (f *fakeRepo) CreateArea(_ context.Context, zoneID string, input CreateArea
 		return Area{}, ErrAreaNameTaken
 	}
 	f.nextID++
-	a := Area{ID: fmt.Sprintf("fake-area-%d", f.nextID), Name: input.Name, ZoneID: zoneID, Active: true, CreatedAt: time.Now()}
+	a := Area{ID: fmt.Sprintf("fake-area-%d", f.nextID), Name: input.Name, ZoneID: zoneID, Active: true, Latitude: input.Latitude, Longitude: input.Longitude, CreatedAt: time.Now()}
 	f.areasByID[a.ID] = a
 	f.areaNames[key] = true
 	return a, nil
@@ -131,6 +131,12 @@ func (f *fakeRepo) UpdateArea(_ context.Context, areaID string, update AreaUpdat
 	f.areaNames[key] = true
 	if update.Active != nil {
 		a.Active = *update.Active
+	}
+	if update.Latitude != nil {
+		a.Latitude = update.Latitude
+	}
+	if update.Longitude != nil {
+		a.Longitude = update.Longitude
 	}
 	f.areasByID[areaID] = a
 	return a, nil
@@ -567,6 +573,125 @@ func TestUpdateAreaHandler_UnknownAreaReturns404(t *testing.T) {
 		`{"name":"X"}`, map[string]string{"zoneID": zone.ID, "areaID": "missing"})
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+// --- Area coordinates ---
+
+func TestCreateAreaHandler_WithCoordinatesSucceeds(t *testing.T) {
+	repo := newFakeRepo()
+	zone, err := repo.CreateZone(context.Background(), CreateZoneInput{Name: "ZCoord"})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+	rec := doRequest(t, CreateAreaHandler(repo), http.MethodPost, "/api/v1/zones/"+zone.ID+"/areas",
+		`{"name":"Area 1","latitude":12.9716,"longitude":77.5946}`, map[string]string{"zoneID": zone.ID})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	body := decodeJSON[map[string]any](t, rec)
+	if body["latitude"] != 12.9716 || body["longitude"] != 77.5946 {
+		t.Errorf("latitude/longitude = %v/%v, want 12.9716/77.5946", body["latitude"], body["longitude"])
+	}
+}
+
+func TestCreateAreaHandler_WithoutCoordinatesLeavesThemNull(t *testing.T) {
+	repo := newFakeRepo()
+	zone, err := repo.CreateZone(context.Background(), CreateZoneInput{Name: "ZNoCoord"})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+	rec := doRequest(t, CreateAreaHandler(repo), http.MethodPost, "/api/v1/zones/"+zone.ID+"/areas",
+		`{"name":"Area 1"}`, map[string]string{"zoneID": zone.ID})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusCreated, rec.Body.String())
+	}
+	body := decodeJSON[map[string]any](t, rec)
+	if body["latitude"] != nil || body["longitude"] != nil {
+		t.Errorf("latitude/longitude = %v/%v, want both null when not supplied", body["latitude"], body["longitude"])
+	}
+}
+
+func TestCreateAreaHandler_OnlyLatitudeProvidedRejected(t *testing.T) {
+	repo := newFakeRepo()
+	zone, err := repo.CreateZone(context.Background(), CreateZoneInput{Name: "ZPartial"})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+	rec := doRequest(t, CreateAreaHandler(repo), http.MethodPost, "/api/v1/zones/"+zone.ID+"/areas",
+		`{"name":"Area 1","latitude":12.9716}`, map[string]string{"zoneID": zone.ID})
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("status = %d, want %d (latitude without longitude must be rejected)", rec.Code, http.StatusUnprocessableEntity)
+	}
+}
+
+func TestCreateAreaHandler_OutOfRangeLatitudeRejected(t *testing.T) {
+	repo := newFakeRepo()
+	zone, err := repo.CreateZone(context.Background(), CreateZoneInput{Name: "ZBadLat"})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+	rec := doRequest(t, CreateAreaHandler(repo), http.MethodPost, "/api/v1/zones/"+zone.ID+"/areas",
+		`{"name":"Area 1","latitude":91,"longitude":0}`, map[string]string{"zoneID": zone.ID})
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("status = %d, want %d (latitude 91 is out of range)", rec.Code, http.StatusUnprocessableEntity)
+	}
+}
+
+func TestCreateAreaHandler_OutOfRangeLongitudeRejected(t *testing.T) {
+	repo := newFakeRepo()
+	zone, err := repo.CreateZone(context.Background(), CreateZoneInput{Name: "ZBadLng"})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+	rec := doRequest(t, CreateAreaHandler(repo), http.MethodPost, "/api/v1/zones/"+zone.ID+"/areas",
+		`{"name":"Area 1","latitude":0,"longitude":181}`, map[string]string{"zoneID": zone.ID})
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Errorf("status = %d, want %d (longitude 181 is out of range)", rec.Code, http.StatusUnprocessableEntity)
+	}
+}
+
+func TestUpdateAreaHandler_SetsCoordinates(t *testing.T) {
+	repo := newFakeRepo()
+	zone, err := repo.CreateZone(context.Background(), CreateZoneInput{Name: "ZSetCoord"})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+	area, err := repo.CreateArea(context.Background(), zone.ID, CreateAreaInput{Name: "A1"})
+	if err != nil {
+		t.Fatalf("seed area failed: %v", err)
+	}
+	rec := doRequest(t, UpdateAreaHandler(repo), http.MethodPut, "/api/v1/zones/"+zone.ID+"/areas/"+area.ID,
+		`{"name":"A1","latitude":12.9716,"longitude":77.5946}`, map[string]string{"zoneID": zone.ID, "areaID": area.ID})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	body := decodeJSON[map[string]any](t, rec)
+	if body["latitude"] != 12.9716 || body["longitude"] != 77.5946 {
+		t.Errorf("latitude/longitude = %v/%v, want 12.9716/77.5946", body["latitude"], body["longitude"])
+	}
+}
+
+func TestUpdateAreaHandler_OmittedCoordinatesLeaveThemUnchanged(t *testing.T) {
+	repo := newFakeRepo()
+	zone, err := repo.CreateZone(context.Background(), CreateZoneInput{Name: "ZKeepCoord"})
+	if err != nil {
+		t.Fatalf("seed create failed: %v", err)
+	}
+	lat, lng := 12.9716, 77.5946
+	area, err := repo.CreateArea(context.Background(), zone.ID, CreateAreaInput{Name: "A1", Latitude: &lat, Longitude: &lng})
+	if err != nil {
+		t.Fatalf("seed area failed: %v", err)
+	}
+	// Rename only — no latitude/longitude field at all in the body.
+	rec := doRequest(t, UpdateAreaHandler(repo), http.MethodPut, "/api/v1/zones/"+zone.ID+"/areas/"+area.ID,
+		`{"name":"Renamed"}`, map[string]string{"zoneID": zone.ID, "areaID": area.ID})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	body := decodeJSON[map[string]any](t, rec)
+	if body["latitude"] != 12.9716 || body["longitude"] != 77.5946 {
+		t.Errorf("latitude/longitude = %v/%v, want them left unchanged at 12.9716/77.5946", body["latitude"], body["longitude"])
 	}
 }
 

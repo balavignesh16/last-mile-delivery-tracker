@@ -427,6 +427,8 @@ paths:
               required: [name]
               properties:
                 name: { type: string }
+                latitude: { type: number, format: double, minimum: -90, maximum: 90, description: "Optional; must be provided together with longitude." }
+                longitude: { type: number, format: double, minimum: -180, maximum: 180, description: "Optional; must be provided together with latitude." }
       responses:
         "201":
           description: Created
@@ -479,7 +481,9 @@ paths:
               required: [name]
               properties:
                 name: { type: string }
-                active: { type: boolean }
+                active: { type: boolean, description: "Omit to leave unchanged." }
+                latitude: { type: number, format: double, minimum: -90, maximum: 90, description: "Omit to leave unchanged; must be provided together with longitude when set." }
+                longitude: { type: number, format: double, minimum: -180, maximum: 180, description: "Omit to leave unchanged; must be provided together with latitude when set." }
       responses:
         "200":
           description: OK
@@ -863,7 +867,7 @@ paths:
   /api/v1/orders/{id}/auto-assign:
     post:
       tags: [Assignment]
-      summary: Automatically select and assign the best-ranked eligible agent (ADMIN only)
+      summary: Automatically select and assign the nearest eligible agent (ADMIN only)
       parameters:
         - $ref: "#/components/parameters/PathId"
       responses:
@@ -871,7 +875,7 @@ paths:
           description: OK
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Order" }
+              schema: { $ref: "#/components/schemas/AutoAssignResponse" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
@@ -1031,6 +1035,8 @@ components:
         name: { type: string }
         zone_id: { type: string, format: uuid }
         active: { type: boolean }
+        latitude: { type: number, format: double, nullable: true, minimum: -90, maximum: 90 }
+        longitude: { type: number, format: double, nullable: true, minimum: -180, maximum: 180 }
         created_at: { type: string, format: date-time }
 
     RateCard:
@@ -1115,6 +1121,19 @@ components:
           type: string
           enum: [CREATED, ASSIGNED, PICKED_UP, IN_TRANSIT, OUT_FOR_DELIVERY, DELIVERED, FAILED, RESCHEDULED]
         created_at: { type: string, format: date-time }
+
+    AssignmentInfo:
+      type: object
+      properties:
+        method: { type: string, enum: [DISTANCE, ZONE] }
+        distance_km: { type: number, format: double, description: "Present only when method is DISTANCE." }
+
+    AutoAssignResponse:
+      allOf:
+        - $ref: "#/components/schemas/Order"
+        - type: object
+          properties:
+            assignment: { $ref: "#/components/schemas/AssignmentInfo" }
 
     TrackingEvent:
       type: object

@@ -43,6 +43,28 @@ legitimately having an area called "Downtown" is not a conflict.
 because an area with no zone would break the resolution chain for every
 later module that reads through it.
 
+## Coordinates (post-M04, migration `0016`)
+
+```sql
+ALTER TABLE areas ADD COLUMN latitude DOUBLE PRECISION CHECK (latitude BETWEEN -90 AND 90);
+ALTER TABLE areas ADD COLUMN longitude DOUBLE PRECISION CHECK (longitude BETWEEN -180 AND 180);
+```
+
+Optional, nullable, no backfill for existing rows — every area starts
+with no coordinates until an admin sets real ones via
+`POST .../areas` or `PUT .../areas/{areaID}`. `POST` requires both or
+neither (`internal/zones.validateOptionalCoordinates`); `PUT` treats
+each as independently "leave unchanged if omitted," the same contract
+`active` already has. Range/finite-number validation
+(`internal/geo.ValidateCoordinates`) is the same shared logic
+`internal/agents`' own (required-pair) location validation delegates
+to — one set of bounds, not two copies of the same rule. These
+coordinates exist for exactly one consumer: `internal/assignment`'s
+auto-assignment ranking, which uses a pickup area's coordinates (when
+set) to rank eligible agents by real Haversine distance instead of
+zone-match alone — see `docs/assignment-engine.md`. Nothing in this
+module reads or interprets them itself.
+
 ## Why there's no DELETE
 
 Zones and areas are configuration that later modules will reference:

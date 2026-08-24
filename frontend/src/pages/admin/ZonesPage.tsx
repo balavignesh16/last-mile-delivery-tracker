@@ -17,6 +17,22 @@ import type { Area, Zone } from '../../types/zone'
 // instead of piling into one long, ever-growing list.
 const PAGE_SIZE = 20
 
+// Both fields blank is valid (no coordinates set — the normal case);
+// exactly one filled is rejected client-side before ever reaching the
+// backend's own "both or neither" rule (zones.validateOptionalCoordinates).
+function parseOptionalCoordinates(latRaw: string, lngRaw: string): { latitude?: number; longitude?: number; error?: string } {
+  const lat = latRaw.trim()
+  const lng = lngRaw.trim()
+  if (!lat && !lng) return {}
+  if (!lat || !lng) return { error: 'Latitude and longitude must both be provided together.' }
+  const latitude = Number(lat)
+  const longitude = Number(lng)
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    return { error: 'Latitude and longitude must be valid numbers.' }
+  }
+  return { latitude, longitude }
+}
+
 // Admin zone/area management (Round 6): a full-width zone workspace —
 // search/status toolbar, dense table, and a full-width area-management
 // workspace that replaces the table (not a permanently-reserved empty
@@ -56,11 +72,18 @@ export function ZonesPage() {
   const [areasError, setAreasError] = useState<string | null>(null)
 
   const [newAreaName, setNewAreaName] = useState('')
+  // Optional — both left blank means "no coordinates yet" (the normal
+  // case). Kept as strings since these are plain text inputs; parsed to
+  // numbers only at submit time (see handleCreateArea/handleSaveArea).
+  const [newAreaLat, setNewAreaLat] = useState('')
+  const [newAreaLng, setNewAreaLng] = useState('')
   const [areaCreateError, setAreaCreateError] = useState<string | null>(null)
   const [creatingArea, setCreatingArea] = useState(false)
 
   const [editingAreaId, setEditingAreaId] = useState<string | null>(null)
   const [areaEditName, setAreaEditName] = useState('')
+  const [areaEditLat, setAreaEditLat] = useState('')
+  const [areaEditLng, setAreaEditLng] = useState('')
   const [areaEditError, setAreaEditError] = useState<string | null>(null)
 
   const selectedZone = zones.find((z) => z.id === selectedZoneId) ?? null
@@ -226,12 +249,19 @@ export function ZonesPage() {
       setAreaCreateError('Name is required.')
       return
     }
+    const coords = parseOptionalCoordinates(newAreaLat, newAreaLng)
+    if (coords.error) {
+      setAreaCreateError(coords.error)
+      return
+    }
     setCreatingArea(true)
     try {
-      const created = await createArea(token, selectedZone.id, { name })
+      const created = await createArea(token, selectedZone.id, { name, latitude: coords.latitude, longitude: coords.longitude })
       setAreas((prev) => [...prev, created])
       setAreaCounts((prev) => ({ ...prev, [selectedZone.id]: (prev[selectedZone.id] ?? 0) + 1 }))
       setNewAreaName('')
+      setNewAreaLat('')
+      setNewAreaLng('')
     } catch (err) {
       setAreaCreateError(err instanceof ApiError ? err.message : 'Could not create area.')
     } finally {
@@ -242,6 +272,8 @@ export function ZonesPage() {
   function startEditArea(area: Area) {
     setEditingAreaId(area.id)
     setAreaEditName(area.name)
+    setAreaEditLat(area.latitude != null ? String(area.latitude) : '')
+    setAreaEditLng(area.longitude != null ? String(area.longitude) : '')
     setAreaEditError(null)
   }
 
@@ -254,8 +286,13 @@ export function ZonesPage() {
       setAreaEditError('Name is required.')
       return
     }
+    const coords = parseOptionalCoordinates(areaEditLat, areaEditLng)
+    if (coords.error) {
+      setAreaEditError(coords.error)
+      return
+    }
     try {
-      const updated = await updateArea(token, selectedZone.id, editingAreaId, { name })
+      const updated = await updateArea(token, selectedZone.id, editingAreaId, { name, latitude: coords.latitude, longitude: coords.longitude })
       setAreas((prev) => prev.map((a) => (a.id === updated.id ? updated : a)))
       setEditingAreaId(null)
     } catch (err) {
@@ -373,6 +410,24 @@ export function ZonesPage() {
                                   onChange={(e) => setAreaEditName(e.target.value)}
                                   className="flex-1 rounded-md border border-slate-300 px-3 py-1 text-sm"
                                 />
+                                <input
+                                  aria-label="Edit area latitude"
+                                  type="text"
+                                  inputMode="decimal"
+                                  placeholder="Latitude"
+                                  value={areaEditLat}
+                                  onChange={(e) => setAreaEditLat(e.target.value)}
+                                  className="w-28 rounded-md border border-slate-300 px-3 py-1 text-sm"
+                                />
+                                <input
+                                  aria-label="Edit area longitude"
+                                  type="text"
+                                  inputMode="decimal"
+                                  placeholder="Longitude"
+                                  value={areaEditLng}
+                                  onChange={(e) => setAreaEditLng(e.target.value)}
+                                  className="w-28 rounded-md border border-slate-300 px-3 py-1 text-sm"
+                                />
                                 <button
                                   type="submit"
                                   className="rounded-md border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-100"
@@ -391,7 +446,14 @@ export function ZonesPage() {
                           </tr>
                         ) : (
                           <tr key={area.id} className="border-t border-slate-100">
-                            <td className="py-2.5 font-medium text-slate-900">{area.name}</td>
+                            <td className="py-2.5 font-medium text-slate-900">
+                              {area.name}
+                              {area.latitude != null && area.longitude != null && (
+                                <div className="mt-0.5 text-xs font-normal text-slate-400">
+                                  {area.latitude.toFixed(4)}, {area.longitude.toFixed(4)}
+                                </div>
+                              )}
+                            </td>
                             <td className="py-2.5">
                               <StatusBadge label={area.active ? 'Active' : 'Inactive'} state={area.active ? 'ok' : 'error'} />
                             </td>
@@ -420,8 +482,8 @@ export function ZonesPage() {
                   </table>
                 )}
 
-                <form onSubmit={handleCreateArea} className="mt-4 flex items-end gap-3 border-t border-slate-100 pt-4">
-                  <div className="flex-1">
+                <form onSubmit={handleCreateArea} className="mt-4 flex flex-wrap items-end gap-3 border-t border-slate-100 pt-4">
+                  <div className="min-w-40 flex-1">
                     <label htmlFor="area_name" className="block text-xs font-medium text-slate-700">
                       New area name
                     </label>
@@ -432,6 +494,32 @@ export function ZonesPage() {
                       value={newAreaName}
                       onChange={(e) => setNewAreaName(e.target.value)}
                       className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="area_latitude" className="block text-xs font-medium text-slate-700">
+                      Latitude (optional)
+                    </label>
+                    <input
+                      id="area_latitude"
+                      type="text"
+                      inputMode="decimal"
+                      value={newAreaLat}
+                      onChange={(e) => setNewAreaLat(e.target.value)}
+                      className="mt-1 w-28 rounded-md border border-slate-300 px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="area_longitude" className="block text-xs font-medium text-slate-700">
+                      Longitude (optional)
+                    </label>
+                    <input
+                      id="area_longitude"
+                      type="text"
+                      inputMode="decimal"
+                      value={newAreaLng}
+                      onChange={(e) => setNewAreaLng(e.target.value)}
+                      className="mt-1 w-28 rounded-md border border-slate-300 px-3 py-2 text-sm"
                     />
                   </div>
                   <button

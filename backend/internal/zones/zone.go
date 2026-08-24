@@ -29,11 +29,19 @@ type Zone struct {
 // considered sufficient — see the 0004 migration's original comment),
 // but an admin legitimately needs to retire a single area without
 // deactivating every other area in the same zone.
+// Latitude/Longitude are optional (both nil, or both set — see
+// CreateAreaInput/AreaUpdate) representative coordinates for the area,
+// used by internal/assignment to rank eligible delivery agents by real
+// distance (internal/geo.HaversineKM) to an order's pickup point rather
+// than zone-match alone. Nil for every area until an admin sets real
+// ones — never geocoded, never a fabricated default.
 type Area struct {
 	ID        string
 	Name      string
 	ZoneID    string
 	Active    bool
+	Latitude  *float64
+	Longitude *float64
 	CreatedAt time.Time
 }
 
@@ -56,18 +64,29 @@ type ZoneUpdate struct {
 // ZoneID field here — the caller (CreateAreaHandler) always passes the
 // zone id from the URL path as a separate argument, never from anything
 // the request body could influence. See handler.go's createAreaRequest.
+//
+// Latitude/Longitude are optional — nil, nil is a completely normal
+// area with no coordinates yet (the auto-assignment fallback to
+// zone-based ranking applies). The handler enforces "both or neither";
+// this type itself doesn't, since that's a request-validation concern.
 type CreateAreaInput struct {
-	Name string
+	Name      string
+	Latitude  *float64
+	Longitude *float64
 }
 
-// AreaUpdate is UpdateArea's only input. Renaming and active-toggling
-// only — moving an area to a different zone is not a requirement the
-// assignment or frozen architecture states, so it isn't offered. Active
-// is a pointer with the same "nil means unchanged" contract as
-// ZoneUpdate.Active.
+// AreaUpdate is UpdateArea's only input. Renaming, active-toggling, and
+// (new) setting coordinates — moving an area to a different zone is not
+// a requirement the assignment or frozen architecture states, so it
+// isn't offered. Active/Latitude/Longitude are pointers with the same
+// "nil means unchanged" contract as ZoneUpdate.Active; there is
+// currently no way to clear a once-set coordinate back to unset via
+// this endpoint, the same limitation Active already has for "unset".
 type AreaUpdate struct {
-	Name   string
-	Active *bool
+	Name      string
+	Active    *bool
+	Latitude  *float64
+	Longitude *float64
 }
 
 // ZoneRelationship classifies a pickup/drop area pair for M06's rate

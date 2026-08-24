@@ -373,9 +373,14 @@ describe('OrderDetailPage', () => {
     expect(JSON.parse(init.body as string)).toEqual({ agent_id: 'agent-1' })
   })
 
-  it('admin auto-assignment posts to the auto-assign endpoint and refreshes the order', async () => {
+  it('admin auto-assignment posts to the auto-assign endpoint and refreshes the order, noting the real distance used', async () => {
     mockAuth('ADMIN')
-    const assignedOrder = { ...order, status: 'ASSIGNED', assigned_agent_id: 'agent-1' }
+    const assignedOrder = {
+      ...order,
+      status: 'ASSIGNED',
+      assigned_agent_id: 'agent-1',
+      assignment: { method: 'DISTANCE', distance_km: 2.4 },
+    }
     let assigned = false
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
@@ -395,7 +400,35 @@ describe('OrderDetailPage', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: 'Auto-assign' })).toBeTruthy())
     fireEvent.click(screen.getByRole('button', { name: 'Auto-assign' }))
 
-    await waitFor(() => expect(screen.getByText('Order auto-assigned to agent agent-1.')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('Order auto-assigned to agent agent-1 (2.4 km away, nearest available).')).toBeTruthy())
+  })
+
+  it('admin auto-assignment notes the zone-based fallback when no real distance was computable', async () => {
+    mockAuth('ADMIN')
+    const assignedOrder = {
+      ...order,
+      status: 'ASSIGNED',
+      assigned_agent_id: 'agent-1',
+      assignment: { method: 'ZONE' },
+    }
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url === '/api/v1/orders/order-1/auto-assign' && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse(200, assignedOrder))
+      }
+      if (url === '/api/v1/orders/order-1') return Promise.resolve(jsonResponse(200, order))
+      if (url === '/api/v1/orders/order-1/tracking') return Promise.resolve(jsonResponse(200, events))
+      if (url === '/api/v1/agents') return Promise.resolve(jsonResponse(200, agentsList))
+      return Promise.reject(new Error(`unexpected fetch: ${url}`))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderAt('/orders/order-1')
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Auto-assign' })).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'Auto-assign' }))
+
+    await waitFor(() => expect(screen.getByText('Order auto-assigned to agent agent-1 (nearest available by zone).')).toBeTruthy())
   })
 
   it('shows an error banner when assignment fails (e.g. no eligible candidate)', async () => {

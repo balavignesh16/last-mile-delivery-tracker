@@ -89,7 +89,7 @@ func setupE2E(t *testing.T) (router chi.Router, pool *pgxpool.Pool, notifyCount 
 		countingEmailProvider{count: &count}, notifications.NewLogSmsProvider(),
 	)
 
-	assignmentRepo := assignment.NewPostgresRepository(p, agentsRepo, ordersRepo, trackingRepo, notificationsService.NotifyTransition)
+	assignmentRepo := assignment.NewPostgresRepository(p, agentsRepo, ordersRepo, trackingRepo, zonesRepo, notificationsService.NotifyTransition)
 	reschedulingRepo := rescheduling.NewPostgresRepository(p, trackingRepo, notificationsService.NotifyTransition)
 
 	logger := testLogger()

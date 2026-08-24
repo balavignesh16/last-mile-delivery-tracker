@@ -67,6 +67,8 @@ erDiagram
         uuid zone_id FK
         string name
         boolean active
+        double latitude
+        double longitude
     }
     RATE_CARDS {
         uuid id PK
@@ -210,23 +212,30 @@ faithfully in `order_tracking_events.actor_role`. See
 
 ```mermaid
 flowchart TD
-    A["Order"] --> B["Resolve pickup zone"]
+    A["Order"] --> B["Resolve pickup zone + pickup area coordinates<br/>(areas.latitude/longitude, if set)"]
     B --> C["Load candidate agent pool"]
     C --> D{"Eligible?<br/>active = true<br/>availability = AVAILABLE<br/>current_zone_id set"}
     D -->|no| X["Excluded from pool"]
-    D -->|yes| E["Rank: same pickup zone<br/>before cross-zone"]
-    E --> F["Tie-break: oldest last_assigned_at first<br/>(never-assigned agents ranked first)"]
-    F --> G["Final tie-break: agent id ascending"]
-    G --> H["Top-ranked agent selected"]
-    H --> I["Same TransitionTx used by manual assign:<br/>order goes to ASSIGNED, agent goes to BUSY"]
-    C --> J["If the pool is empty after filtering"]
-    J --> K["No eligible candidate: assignment fails,<br/>never guesses or substitutes"]
+    D -->|yes| E{"Real coordinates on<br/>both this agent and<br/>the pickup area?"}
+    E -->|yes| F["Rank by Haversine distance<br/>to the pickup point (nearer wins)"]
+    E -->|no| G["Rank: same pickup zone<br/>before cross-zone"]
+    F --> H["Tie-break: oldest last_assigned_at first<br/>(never-assigned agents ranked first)"]
+    G --> H
+    H --> I["Final tie-break: agent id ascending"]
+    I --> J["Top-ranked agent selected"]
+    J --> K["Same TransitionTx used by manual assign:<br/>order goes to ASSIGNED, agent goes to BUSY"]
+    C --> L["If the pool is empty after filtering"]
+    L --> M["No eligible candidate: assignment fails,<br/>never guesses or substitutes"]
 ```
 
 This is `assignment.SelectCandidate` exactly (`internal/assignment/candidate.go`).
-There is no pickup coordinate anywhere in this schema (only agents carry
-`current_lat`/`current_lng`), so zone match is the only geographic
-signal available — a deliberate, documented choice, not a gap; see
+Distance is computed only when both sides have a real, admin-entered
+coordinate (an agent's own `current_lat`/`current_lng`, and a pickup
+area's optional `latitude`/`longitude` — migration `0016`) — a
+candidate with a computable distance always outranks one without, since
+that's strictly more informative than the zone-match proxy. Neither
+coordinate is ever geocoded or fabricated; a freshly configured area
+simply uses the zone-based fallback until an admin sets real ones. See
 [`docs/assignment-engine.md`](docs/assignment-engine.md).
 
 ### Rate calculation flow
@@ -258,10 +267,10 @@ out of sync with it. See [`docs/rate-calculation.md`](docs/rate-calculation.md).
 
 Facts only, each verifiable directly against this repository:
 
-- **489 Go test functions** across 47 backend test files — unit,
+- **518 Go test functions** across 48 backend test files — unit,
   integration (`-tags integration`, against a real PostgreSQL instance),
   and end-to-end (`-tags e2e`, real router + real database) suites.
-- **228 frontend tests** across 30 files (Vitest + Testing Library).
+- **231 frontend tests** across 30 files (Vitest + Testing Library).
 - **8 dedicated concurrency-race tests** proven against real concurrent
   load on PostgreSQL, e.g. `TestConcurrentActivation_OnlyOneWins`,
   `TestAssignmentConcurrency_SameAgentRacedByTwoOrders`,
@@ -1364,3 +1373,4 @@ Grows with each module.
 | Admin places an order on a customer's behalf by email lookup, not a raw customer id | `backend/internal/auth/handler.go` (`LookupCustomerHandler`), `frontend/src/pages/CreateOrderPage.tsx` | `TestLookupCustomerHandler_*` (unit, incl. identical-404 for unknown vs. non-customer email) | `docs/api.md` |
 | Tracking events and reschedule requests record the real actor's role, not just their id (`actor_role`, `requested_by_role`), never backfilled for historical rows | `backend/migrations/0015_add_actor_role_to_events.sql`, `internal/tracking/repository.go`, `internal/rescheduling/repository.go` | `TestRescheduleFlow_CustomerHappyPath`/`_AdminHappyPath` (integration, assert the real caller's role — not the ADMIN role used only for M08 edge authorization — is what gets persisted) | `docs/failed-delivery.md` |
 | Branded HTML email notifications, with an escaped plain-text fallback | `backend/internal/notifications/email_template.go`, `notification.go` | `TestBuildContent_HTMLBody*` (incl. an XSS-style escaping case for untrusted metadata text) | `docs/notifications.md` |
+| Auto-assignment ranks by real Haversine distance to the pickup point when both the agent and the pickup area have known coordinates, falling back to zone-based ranking otherwise (never fabricated/geocoded) | `backend/internal/geo/geo.go`, `internal/assignment/candidate.go`, `internal/zones/` (area `latitude`/`longitude`, migration `0016`) | `TestSelectCandidate_*` distance cases, `TestHaversineKM_*` (incl. a real reference pair), `TestAssignmentFlow_AutoAssignPrefersRealDistanceOverZoneMatch`/`_FallsBackToZoneWithoutCoordinates` (integration, real Postgres) | `docs/assignment-engine.md`, `docs/zone-management.md` |

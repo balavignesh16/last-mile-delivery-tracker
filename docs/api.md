@@ -295,19 +295,19 @@ curl -X PUT http://localhost:8080/api/v1/zones/$ZONE_ID \
 
 ### `POST /api/v1/zones/{zoneID}/areas`
 
-**Auth**: required, **ADMIN only**. **Purpose**: create an area under the zone named in the URL. The request body has no `zone_id` field — sending one is rejected outright (422, unknown field), the same fail-closed pattern as agent creation having no `role` field. The zone in the path is the only source of the relationship.
+**Auth**: required, **ADMIN only**. **Purpose**: create an area under the zone named in the URL. The request body has no `zone_id` field — sending one is rejected outright (422, unknown field), the same fail-closed pattern as agent creation having no `role` field. The zone in the path is the only source of the relationship. `latitude`/`longitude` are optional — omit both for an area with no known coordinates yet (the default), or supply both together (one without the other is `422`) — see `docs/zone-management.md` and `docs/assignment-engine.md` for why they exist.
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/zones/$ZONE_ID/areas \
   -H "Authorization: Bearer $ADMIN_TOKEN" -H 'Content-Type: application/json' \
-  -d '{"name":"Downtown"}'
+  -d '{"name":"Downtown","latitude":12.9716,"longitude":77.5946}'
 ```
 
 ```json
-{ "id": "9a1b...", "name": "Downtown", "zone_id": "1f2e...", "created_at": "2026-08-20T16:05:00Z" }
+{ "id": "9a1b...", "name": "Downtown", "zone_id": "1f2e...", "active": true, "latitude": 12.9716, "longitude": 77.5946, "created_at": "2026-08-20T16:05:00Z" }
 ```
 
-**Errors**: `401`, `403`, `404` (unknown zone), `409` (an area with this name already exists *in this zone* — the same name is fine in a different zone), `422`.
+**Errors**: `401`, `403`, `404` (unknown zone), `409` (an area with this name already exists *in this zone* — the same name is fine in a different zone), `422` (missing name, or exactly one of `latitude`/`longitude` provided, or either out of range).
 
 ### `GET /api/v1/zones/{zoneID}/areas`
 
@@ -315,9 +315,9 @@ curl -X POST http://localhost:8080/api/v1/zones/$ZONE_ID/areas \
 
 ### `PUT /api/v1/zones/{zoneID}/areas/{areaID}`
 
-**Auth**: required, **ADMIN only**. **Purpose**: rename an area. Moving an area to a different zone is not supported — this endpoint only renames. If `{areaID}` exists but belongs to a different zone than `{zoneID}` names, the response is `404` (treated identically to "doesn't exist," not a more specific error, so this endpoint never confirms an area's existence under the wrong zone).
+**Auth**: required, **ADMIN only**. **Purpose**: rename an area, toggle `active`, and/or set its coordinates. Moving an area to a different zone is not supported. `active`/`latitude`/`longitude` are each independently optional — an omitted field is left unchanged, the same "nil means unchanged" contract as the zone `PUT`. If `{areaID}` exists but belongs to a different zone than `{zoneID}` names, the response is `404` (treated identically to "doesn't exist," not a more specific error, so this endpoint never confirms an area's existence under the wrong zone).
 
-**Errors**: `401`, `403`, `404`, `409` (name taken within the zone), `422`.
+**Errors**: `401`, `403`, `404`, `409` (name taken within the zone), `422` (also: exactly one of `latitude`/`longitude` provided, or either out of range).
 
 ---
 
@@ -620,14 +620,23 @@ event this transition also produces (with `metadata:
 
 ### `POST /api/v1/orders/:id/auto-assign`
 
-**Auth**: required, **ADMIN only**. **Purpose**: automatically select and assign the best-ranked eligible agent. No request body fields — every input the ranking algorithm needs is read fresh from the order (its pickup zone) and the `delivery_agents` table.
+**Auth**: required, **ADMIN only**. **Purpose**: automatically select and assign the nearest eligible agent. No request body fields — every input the ranking algorithm needs is read fresh from the order (its pickup zone/area) and the `delivery_agents`/`areas` tables. Ranks by real Haversine distance to the pickup point when both the candidate agent and the pickup area have known coordinates, falling back to zone-based ranking otherwise — see `docs/assignment-engine.md`.
 
 ```bash
 curl -X POST http://localhost:8080/api/v1/orders/$ORDER_ID/auto-assign \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 ```
 
-Response: the same updated-order shape as `POST .../assign`.
+Response: the same updated-order shape as `POST .../assign`, plus an `assignment` object describing how the winner was picked:
+
+```json
+{
+  "id": "...", "assigned_agent_id": "...", "status": "ASSIGNED",
+  "assignment": { "method": "DISTANCE", "distance_km": 1.7 }
+}
+```
+
+`method` is `"DISTANCE"` (a real computed distance decided it — `distance_km` present) or `"ZONE"` (the zone-based fallback did — `distance_km` omitted entirely, not `null`).
 
 **Errors**: `401`, `403` (non-`ADMIN`), `404` (unknown order), `409` (no agent satisfies the eligibility rule, or the order isn't currently in a status M08 permits `→ASSIGNED` from).
 

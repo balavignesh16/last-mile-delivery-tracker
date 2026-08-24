@@ -19,10 +19,26 @@ const AVAILABILITY_STATE: Record<Availability, 'ok' | 'degraded' | 'error'> = {
   OFFLINE: 'error',
 }
 
+function geolocationErrorMessage(error: GeolocationPositionError): string {
+  switch (error.code) {
+    case error.PERMISSION_DENIED:
+      return 'Location permission was denied. Enter your coordinates manually below.'
+    case error.POSITION_UNAVAILABLE:
+      return 'Your current location could not be determined. Enter your coordinates manually below.'
+    case error.TIMEOUT:
+      return 'Locating your position took too long. Enter your coordinates manually below.'
+    default:
+      return 'Could not determine your current location. Enter your coordinates manually below.'
+  }
+}
+
 // Agent-side operational controls: view/change own availability, report
 // current location, and pick a current operating zone. Location is a
-// plain manual latitude/longitude form — no browser geolocation, no maps
-// — per M03's explicit scope. Zone selection is a plain dropdown of real
+// manual latitude/longitude form, optionally pre-filled via the
+// browser's native Geolocation API (no maps, no third-party service, no
+// new dependency) — an agent can still type coordinates by hand if they
+// decline the permission prompt or their browser/context doesn't
+// support it. Zone selection is a plain dropdown of real
 // zones (GET /zones, read-access widened for DELIVERY_AGENT) rather than
 // deriving a zone from lat/lng — there is no zone-boundary geometry
 // anywhere in this schema to geofence against (see
@@ -32,6 +48,7 @@ const AVAILABILITY_STATE: Record<Availability, 'ok' | 'degraded' | 'error'> = {
 // become eligible for auto-assignment.
 export function OperationsPage() {
   const { token } = useAuth()
+  const geolocationSupported = typeof navigator !== 'undefined' && !!navigator.geolocation
 
   const [agent, setAgent] = useState<Agent | null>(null)
   const [loading, setLoading] = useState(true)
@@ -45,6 +62,7 @@ export function OperationsPage() {
   const [locationError, setLocationError] = useState<string | null>(null)
   const [locationSuccess, setLocationSuccess] = useState(false)
   const [savingLocation, setSavingLocation] = useState(false)
+  const [locatingViaGPS, setLocatingViaGPS] = useState(false)
 
   const [zones, setZones] = useState<Zone[]>([])
   const [selectedZoneId, setSelectedZoneId] = useState('')
@@ -128,6 +146,24 @@ export function OperationsPage() {
     } finally {
       setSavingLocation(false)
     }
+  }
+
+  function handleUseCurrentLocation() {
+    setLocationError(null)
+    setLocationSuccess(false)
+    setLocatingViaGPS(true)
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        setLatitude(String(position.coords.latitude))
+        setLongitude(String(position.coords.longitude))
+        setLocatingViaGPS(false)
+      },
+      (error) => {
+        setLocationError(geolocationErrorMessage(error))
+        setLocatingViaGPS(false)
+      },
+      { timeout: 10000 },
+    )
   }
 
   async function handleZoneSubmit(e: FormEvent) {
@@ -243,6 +279,17 @@ export function OperationsPage() {
           <Navigation className="h-4 w-4 text-navy-500" aria-hidden="true" />
           Current location
         </h2>
+        {geolocationSupported && (
+          <button
+            type="button"
+            onClick={handleUseCurrentLocation}
+            disabled={locatingViaGPS || savingLocation}
+            className="mt-3 flex items-center gap-1.5 rounded-md border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-100 disabled:opacity-50"
+          >
+            <Navigation className="h-3.5 w-3.5" aria-hidden="true" />
+            {locatingViaGPS ? 'Locating…' : 'Use my current location'}
+          </button>
+        )}
         <form onSubmit={handleLocationSubmit} className="mt-4 grid gap-4 sm:grid-cols-2">
           <ErrorBanner message={locationError} />
           {locationSuccess && (

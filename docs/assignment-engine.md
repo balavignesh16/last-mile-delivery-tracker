@@ -13,12 +13,13 @@ unmodified. See "M08 reuse" below.
 Explicitly out of scope: reschedule-request handling (M10 — now
 implemented, see `docs/failed-delivery.md`, reuses this module's own
 `Assign`/`AutoAssign` for `RESCHEDULED→ASSIGNED` unmodified rather than
-duplicating them), notifications (M11), dashboards/analytics, geographic-distance ranking (no coordinate
-data exists anywhere in the schema for orders/zones/areas — only
-`delivery_agents.current_lat`/`current_lng`, which nothing resolves a
-pickup point against), an assignment-history table, status-preserving
-reassignment of an already-`ASSIGNED` order, and a candidate-preview
-endpoint.
+duplicating them), notifications (M11), dashboards/analytics, real-time
+GPS tracking, maps, and geofencing (agent/area coordinates are static,
+manually-entered values — see "Auto-assignment ranking" below for the
+one real distance calculation this module does perform, once
+coordinates exist on both sides), an assignment-history table,
+status-preserving reassignment of an already-`ASSIGNED` order, and a
+candidate-preview endpoint.
 
 ## Eligibility
 
@@ -48,35 +49,51 @@ is closed without touching this module's eligibility or ranking logic.
 
 ## Auto-assignment ranking
 
-No coordinates exist anywhere in this schema for orders, zones, or
-areas — only `delivery_agents.current_lat`/`current_lng`, which nothing
-ever resolves a pickup point against. True geographic-distance ranking
-is therefore not computable, and this module does not invent one.
-Ranking (`internal/assignment.SelectCandidate`) is a deterministic,
-pure function over four ordered criteria, applied only after filtering
-to eligible candidates:
+`areas.latitude`/`areas.longitude` (migration 0016) are optional,
+admin-entered coordinates for a service area — never geocoded, never
+backfilled for existing rows. When both the candidate agent
+(`delivery_agents.current_lat`/`current_lng`) and the order's pickup
+area have a real coordinate, `internal/assignment.SelectCandidate`
+ranks by actual Haversine distance to the pickup point
+(`internal/geo.HaversineKM`) — the nearest wins. Otherwise (the common
+case today, since most areas have no coordinates set yet) ranking falls
+back to the original zone-based criteria below. Applied only after
+filtering to eligible candidates:
 
-1. **Same-zone preferred over cross-zone.** An agent whose
+1. **Real distance, when computable.** If a candidate has known
+   coordinates and the pickup area does too, that candidate ranks by
+   distance ascending against every other candidate with a computable
+   distance. A candidate with a computable distance always outranks one
+   without — a real distance is strictly more informative than the
+   zone-match proxy below, which is why this step comes first, not as a
+   tiebreak on top of it.
+2. **Same-zone preferred over cross-zone** (the fallback, used whenever
+   distance isn't computable for a given pair). An agent whose
    `current_zone_id` matches the order's `pickup_zone_id` ranks ahead of
    every agent that doesn't. Cross-zone is never excluded — only ranked
-   lower — since zone-match is the only locality signal this schema
-   actually provides.
-2. **`last_assigned_at` ascending, `NULL` first.** An agent who has
+   lower.
+3. **`last_assigned_at` ascending, `NULL` first.** An agent who has
    never been assigned, or has been idle longest, is preferred — simple
    fair rotation.
-3. **Agent UUID ascending** — the final, unconditional tiebreaker. This
+4. **Agent UUID ascending** — the final, unconditional tiebreaker. This
    is what makes `SelectCandidate` a genuine strict total order: given
    the same candidate pool, it returns the same winner regardless of
-   the pool's input order (`TestSelectCandidate_Deterministic` proves
-   this directly, feeding the same five candidates through four
-   different orderings).
+   the pool's input order (`TestSelectCandidate_Deterministic`,
+   `TestSelectCandidate_DeterministicWithDistance` both prove this
+   directly, feeding the same candidates through four different
+   orderings).
 
 `SelectCandidate` is pure and database-free — no `pgx`, no `context`,
-just `[]Candidate` in, one `Candidate` out or `ErrNoEligibleCandidate`.
+just `[]Candidate`, a pickup zone id, and an optional pickup
+latitude/longitude in, one `Candidate` out or `ErrNoEligibleCandidate`.
 It is independently unit-tested (`internal/assignment/candidate_test.go`)
 without any Postgres dependency, the same "pure decision function,
 separately-tested database plumbing" split `rates.SelectSlab` and
-`tracking.IsValidTransition` established.
+`tracking.IsValidTransition` established. `AutoAssign` resolves the
+pickup area's coordinates via `zones.Repository.FindAreaByID` before
+ranking, and reports which method actually decided the winner
+(`AssignmentOutcome{Method, DistanceKM}`) back through
+`POST /orders/:id/auto-assign`'s response — see `docs/api.md`.
 
 ## M08 reuse — non-negotiable
 
@@ -212,6 +229,12 @@ assigned when, by whom) lives entirely in `order_tracking_events`'s own
 `metadata` on each `ASSIGNED` event, which M08 already made immutable
 and append-only. No new table was needed to add that history.
 
+Post-M09, migration `0016` adds `areas.latitude`/`areas.longitude`
+(nullable, same range `CHECK`s as `delivery_agents.current_lat/lng`,
+owned by `internal/zones` — see `docs/zone-management.md`) purely so
+this module's ranking has a real pickup-point coordinate to measure
+against; this module owns no new column of its own for it.
+
 ## DELIVERY_AGENT order visibility
 
 `GET /orders` and `GET /orders/{id}` (`internal/orders`) widened to
@@ -248,8 +271,9 @@ touch M08's own authorization. See `docs/order-tracking.md`.
 
 ## What this module deliberately does not do
 
-- No geographic-distance ranking or coordinate infrastructure — the
-  schema has none to rank against (see "Auto-assignment ranking").
+- No real-time GPS tracking, live map, or geofencing — agent/area
+  coordinates are static, manually-entered values (see "Auto-assignment
+  ranking" for the actual Haversine ranking this module does perform).
 - No assignment-history table — `order_tracking_events.metadata`
   already provides it.
 - No status-preserving reassignment of an `ASSIGNED` order, no separate
@@ -294,11 +318,26 @@ touch M08's own authorization. See `docs/order-tracking.md`.
   `last_assigned_at` ordering including `NULL`-first, the UUID
   tiebreak, no-eligible-candidate returning `ErrNoEligibleCandidate`,
   and determinism across four different input orderings of the same
-  pool.
+  pool — plus the distance-ranking additions: nearest-of-three wins,
+  real distance beats a same-zone-but-no-location competitor, the
+  nearest-but-unavailable agent is excluded in favor of the farther
+  available one, an agent with no location loses to one with a real
+  distance, the pickup-has-no-coordinates and
+  agent-has-no-coordinates fallbacks each reproduce the original
+  zone-based winner, an exact distance tie still falls through to
+  `last_assigned_at`/UUID, and determinism holds with real coordinates
+  in the pool.
+- **Unit** (`internal/geo/geo_test.go`): coordinate range/finite-number
+  validation at and beyond every boundary; `HaversineKM` against a
+  same-point (zero), a synthetic one-degree-of-longitude-at-the-equator
+  case, and a real reference pair (London↔Paris, ~343.5km) within a
+  tolerance.
 - **Unit** (`internal/assignment/handler_test.go`, fake `Repository`):
   admin happy path for both endpoints, `CUSTOMER`/`DELIVERY_AGENT`/
   unauthenticated rejection, missing/unknown-field/malformed body,
-  every sentinel-error-to-status-code mapping (404/409/500).
+  every sentinel-error-to-status-code mapping (404/409/500), and the
+  auto-assign response's `assignment` object for both the `DISTANCE`
+  and `ZONE` outcomes.
 - **Integration** (`tests/integration/assignment_integration_test.go`,
   against real Postgres): manual and auto-assign happy paths, same-zone-
   wins and cross-zone-accepted at the HTTP level, every ineligibility
@@ -307,16 +346,25 @@ touch M08's own authorization. See `docs/order-tracking.md`.
   (terminal) order rejected, the `FAILED→RESCHEDULED→ASSIGNED` path
   working end to end, no-eligible-candidate rejected, a rejected
   assignment leaving no partial state (order status/agent availability
-  both unchanged, no stray tracking event), and both concurrency races
+  both unchanged, no stray tracking event), both concurrency races
   proven with real goroutines against real Postgres, repeated
-  (`-count=5`).
+  (`-count=5`) — and, against a real migrated schema, a cross-zone
+  agent with a real ~1km distance winning over a same-zone agent with
+  no location (asserting both the winning agent and the response's
+  `DISTANCE` method/distance), and the inverse zone-fallback case with
+  no coordinates anywhere.
 - **Frontend**: `services/assignment.test.ts` (request shape, error
   mapping); `OrderDetailPage.test.tsx` (assigned-agent display,
   `ADMIN`-only controls hidden from `CUSTOMER`, controls hidden once the
   order leaves an assignable status, manual assign posts the right body
-  and refreshes, auto-assign posts and refreshes, error banner on
-  rejection, a `DELIVERY_AGENT` viewing their own assigned order without
-  the tracking timeline); `OrdersPage.test.tsx` ("My assigned orders"
-  title, no "New order" link for `DELIVERY_AGENT`).
+  and refreshes, auto-assign posts and refreshes and notes the real
+  distance when `assignment.method` is `DISTANCE`, notes the zone
+  fallback when it's `ZONE`, error banner on rejection, a
+  `DELIVERY_AGENT` viewing their own assigned order without the
+  tracking timeline); `OrdersPage.test.tsx` ("My assigned orders"
+  title, no "New order" link for `DELIVERY_AGENT`);
+  `admin/ZonesPage.test.tsx` (creating an area with coordinates and
+  displaying them, rejecting a request with only one of
+  latitude/longitude before it ever reaches the backend).
 - **Regression**: the complete M01–M08 backend and frontend suites
   re-verified green after every change in this module.

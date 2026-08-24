@@ -3,7 +3,9 @@
 package integration
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -54,7 +56,7 @@ func setupAssignmentTest(t *testing.T) (router http.Handler, usersRepo users.Rep
 	oRepo := orders.NewPostgresRepository(p)
 	tRepo := tracking.NewPostgresRepository(p)
 	aRepo := agents.NewPostgresRepository(p)
-	asRepo := assignment.NewPostgresRepository(p, aRepo, oRepo, tRepo, nil)
+	asRepo := assignment.NewPostgresRepository(p, aRepo, oRepo, tRepo, zRepo, nil)
 	r := server.NewRouter(p, testLogger(),
 		auth.Mount(uRepo, agentsIntegrationJWTSecret),
 		zones.Mount(zRepo, agentsIntegrationJWTSecret),
@@ -237,6 +239,143 @@ func TestAssignmentFlow_AutoAssignAcceptsCrossZoneWhenNoSameZoneCandidate(t *tes
 	updated := decodeOrder(t, rec.Body.Bytes())
 	if updated["assigned_agent_id"] != crossZoneAgent.ID {
 		t.Errorf("assigned_agent_id = %v, want the only (cross-zone) candidate %v", updated["assigned_agent_id"], crossZoneAgent.ID)
+	}
+}
+
+// setAgentLocation sets an already-seeded agent's current_lat/current_lng
+// directly via SQL — there is no HTTP-level helper used elsewhere in
+// this file for it, and PUT /agents/{id}/location (M03) is exercised in
+// its own package's tests; this file only needs the resulting column
+// values to exist for the assignment-ranking algorithm to read.
+func setAgentLocation(t *testing.T, pool *pgxpool.Pool, agentID string, lat, lng float64) {
+	t.Helper()
+	if _, err := pool.Exec(context.Background(),
+		`UPDATE delivery_agents SET current_lat = $1, current_lng = $2 WHERE id = $3`,
+		lat, lng, agentID,
+	); err != nil {
+		t.Fatalf("setAgentLocation() error: %v", err)
+	}
+}
+
+// setAreaLocation sets an area's latitude/longitude via the real
+// zones.Repository.UpdateArea path (the same code PUT
+// /zones/{zoneID}/areas/{areaID} uses), preserving its current name —
+// the same "read then write back unchanged plus the new field" pattern
+// UpdateAreaHandler's own contract requires.
+func setAreaLocation(t *testing.T, zRepo zones.Repository, areaID string, lat, lng float64) {
+	t.Helper()
+	area, err := zRepo.FindAreaByID(context.Background(), areaID)
+	if err != nil {
+		t.Fatalf("FindAreaByID() error: %v", err)
+	}
+	if _, err := zRepo.UpdateArea(context.Background(), areaID, zones.AreaUpdate{Name: area.Name, Latitude: &lat, Longitude: &lng}); err != nil {
+		t.Fatalf("UpdateArea() error: %v", err)
+	}
+}
+
+// --- Auto-assignment: distance-based ranking (real coordinates, real DB) ---
+
+// TestAssignmentFlow_AutoAssignPrefersRealDistanceOverZoneMatch proves
+// the new ranking end to end against a real Postgres instance: a
+// same-zone agent with no known location loses to a cross-zone agent
+// with a real, close, known distance to the pickup point — exactly the
+// "detect the nearest available agent based on current location" case
+// the zone-only ranking could never satisfy. Also proves the API
+// response surfaces which ranking method actually decided it.
+func TestAssignmentFlow_AutoAssignPrefersRealDistanceOverZoneMatch(t *testing.T) {
+	router, uRepo, zRepo, aRepo, pool := setupAssignmentTest(t)
+	admin := adminToken(t, uRepo)
+	customer := customerToken(t, uRepo)
+	neutralizeAvailableAgents(t, pool)
+
+	order := createTestOrder(t, router, zRepo, pool, admin, customer, "B2C", "INTRA")
+	orderID, _ := order["id"].(string)
+	pickupZoneID, _ := order["pickup_zone_id"].(string)
+	pickupAreaID, _ := order["pickup_area_id"].(string)
+	// Bengaluru city-center-ish coordinates — any real, valid pair works;
+	// what matters is the relative distances below.
+	setAreaLocation(t, zRepo, pickupAreaID, 12.9716, 77.5946)
+
+	otherZone, err := zRepo.CreateZone(context.Background(), zones.CreateZoneInput{Name: uniqueEmail("assignment-distance-zone")})
+	if err != nil {
+		t.Fatalf("CreateZone() error: %v", err)
+	}
+
+	// Same zone as the pickup point, but no known location at all — the
+	// old ranking would have picked this agent every time.
+	sameZoneNoLocation := seedAgent(t, aRepo, pool, pickupZoneID, true, agents.AvailabilityAvailable)
+
+	// A different zone, but a real location ~1km from the pickup point.
+	crossZoneNearby := seedAgent(t, aRepo, pool, otherZone.ID, true, agents.AvailabilityAvailable)
+	setAgentLocation(t, pool, crossZoneNearby.ID, 12.9800, 77.5946) // ~0.93km north
+
+	rec := autoAssignOrder(router, admin, orderID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("auto-assign status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	updated := decodeOrder(t, rec.Body.Bytes())
+	if updated["assigned_agent_id"] != crossZoneNearby.ID {
+		t.Errorf("assigned_agent_id = %v, want the cross-zone agent with a real known distance %v (not the same-zone agent with no location %v)",
+			updated["assigned_agent_id"], crossZoneNearby.ID, sameZoneNoLocation.ID)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(bytes.NewReader(rec.Body.Bytes())).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	assignment, ok := body["assignment"].(map[string]any)
+	if !ok {
+		t.Fatalf("response has no \"assignment\" object: %v", body)
+	}
+	if assignment["method"] != "DISTANCE" {
+		t.Errorf("assignment.method = %v, want DISTANCE", assignment["method"])
+	}
+	distanceKM, ok := assignment["distance_km"].(float64)
+	if !ok || distanceKM <= 0 || distanceKM > 5 {
+		t.Errorf("assignment.distance_km = %v, want a small positive value (~0.9km)", assignment["distance_km"])
+	}
+}
+
+// TestAssignmentFlow_AutoAssignFallsBackToZoneWithoutCoordinates proves
+// the inverse: when neither the pickup area nor the agents have any
+// known coordinates (the default state for every area until an admin
+// sets real ones), auto-assign behaves exactly as it did before this
+// feature existed — zone-based ranking, reported as such in the
+// response.
+func TestAssignmentFlow_AutoAssignFallsBackToZoneWithoutCoordinates(t *testing.T) {
+	router, uRepo, zRepo, aRepo, pool := setupAssignmentTest(t)
+	admin := adminToken(t, uRepo)
+	customer := customerToken(t, uRepo)
+	neutralizeAvailableAgents(t, pool)
+
+	order := createTestOrder(t, router, zRepo, pool, admin, customer, "B2C", "INTRA")
+	orderID, _ := order["id"].(string)
+	pickupZoneID, _ := order["pickup_zone_id"].(string)
+
+	sameZoneAgent := seedAgent(t, aRepo, pool, pickupZoneID, true, agents.AvailabilityAvailable)
+
+	rec := autoAssignOrder(router, admin, orderID)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("auto-assign status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	updated := decodeOrder(t, rec.Body.Bytes())
+	if updated["assigned_agent_id"] != sameZoneAgent.ID {
+		t.Errorf("assigned_agent_id = %v, want the same-zone agent %v", updated["assigned_agent_id"], sameZoneAgent.ID)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(bytes.NewReader(rec.Body.Bytes())).Decode(&body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	assignment, ok := body["assignment"].(map[string]any)
+	if !ok {
+		t.Fatalf("response has no \"assignment\" object: %v", body)
+	}
+	if assignment["method"] != "ZONE" {
+		t.Errorf("assignment.method = %v, want ZONE (no coordinates anywhere in this scenario)", assignment["method"])
+	}
+	if _, present := assignment["distance_km"]; present {
+		t.Errorf("assignment.distance_km = %v, want the field absent for the zone fallback", assignment["distance_km"])
 	}
 }
 

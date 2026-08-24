@@ -149,7 +149,7 @@ func setupNotificationsTest(t *testing.T) (router http.Handler, usersRepo users.
 	nRepo := notifications.NewPostgresRepository(p)
 	nSvc := notifications.NewService(nRepo, oRepo, uRepo, tRepo, emailP, smsP)
 
-	asRepo := assignment.NewPostgresRepository(p, aRepo, oRepo, tRepo, nSvc.NotifyTransition)
+	asRepo := assignment.NewPostgresRepository(p, aRepo, oRepo, tRepo, zRepo, nSvc.NotifyTransition)
 	rsRepo := rescheduling.NewPostgresRepository(p, tRepo, nSvc.NotifyTransition)
 
 	r := server.NewRouter(p, testLogger(),

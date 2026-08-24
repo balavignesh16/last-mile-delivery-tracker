@@ -19,8 +19,9 @@ type fakeAssignmentRepo struct {
 	orders map[string]orders.Order
 	agents map[string]bool // agentID -> exists
 
-	assignErr     error
-	autoAssignErr error
+	assignErr         error
+	autoAssignErr     error
+	autoAssignOutcome AssignmentOutcome
 	// lastAssignAgentID records the agent_id AssignHandler forwarded, so
 	// tests can confirm the handler passed the request body through
 	// unmodified rather than mutating it.
@@ -50,17 +51,17 @@ func (f *fakeAssignmentRepo) Assign(_ context.Context, orderID, agentID, _ strin
 	return o, nil
 }
 
-func (f *fakeAssignmentRepo) AutoAssign(_ context.Context, orderID, _ string, _ users.Role) (orders.Order, error) {
+func (f *fakeAssignmentRepo) AutoAssign(_ context.Context, orderID, _ string, _ users.Role) (orders.Order, AssignmentOutcome, error) {
 	if f.autoAssignErr != nil {
-		return orders.Order{}, f.autoAssignErr
+		return orders.Order{}, AssignmentOutcome{}, f.autoAssignErr
 	}
 	o, ok := f.orders[orderID]
 	if !ok {
-		return orders.Order{}, ErrOrderNotFound
+		return orders.Order{}, AssignmentOutcome{}, ErrOrderNotFound
 	}
 	o.Status = "ASSIGNED"
 	f.orders[orderID] = o
-	return o, nil
+	return o, f.autoAssignOutcome, nil
 }
 
 var errFakeInternal = errors.New("fake internal error")

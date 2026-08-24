@@ -13,6 +13,7 @@ import (
 	"lastmiletracker/internal/orders"
 	"lastmiletracker/internal/tracking"
 	"lastmiletracker/internal/users"
+	"lastmiletracker/internal/zones"
 )
 
 var (
@@ -32,15 +33,38 @@ var (
 	ErrAgentNotEligible = errors.New("delivery agent is not eligible for assignment")
 )
 
+// AssignmentOutcome describes how AutoAssign selected its winning
+// candidate — surfaced by AutoAssignHandler alongside the updated order
+// so a caller can see whether a real, computed distance was used or the
+// zone-based fallback applied, per the source problem statement's
+// "detect the nearest available agent based on current location or
+// zone." Manual assignment (Assign) has no outcome — the admin already
+// chose the agent, there is nothing to rank or report.
+type AssignmentOutcome struct {
+	// Method is "DISTANCE" when the winning candidate had a real,
+	// computable distance to the pickup point, or "ZONE" when the
+	// zone-based fallback ranking decided it instead (see
+	// candidate.go's rankLess for exactly when each applies).
+	Method string
+	// DistanceKM is non-nil only when Method == "DISTANCE".
+	DistanceKM *float64
+}
+
+const (
+	AssignmentMethodDistance = "DISTANCE"
+	AssignmentMethodZone     = "ZONE"
+)
+
 // Repository is the storage interface the assignment handlers depend
 // on. An interface — rather than the concrete *PostgresRepository — so
 // handler unit tests can inject an in-memory fake, the same pattern
-// every prior module in this project uses. Both methods return the
-// updated order (the finalized M09 response shape) or one of this
-// package's/tracking's sentinel errors.
+// every prior module in this project uses. Assign returns the updated
+// order (the finalized M09 response shape) or one of this package's/
+// tracking's sentinel errors; AutoAssign additionally returns the
+// AssignmentOutcome describing how its candidate was ranked.
 type Repository interface {
 	Assign(ctx context.Context, orderID, agentID, actorID string, actorRole users.Role) (orders.Order, error)
-	AutoAssign(ctx context.Context, orderID, actorID string, actorRole users.Role) (orders.Order, error)
+	AutoAssign(ctx context.Context, orderID, actorID string, actorRole users.Role) (orders.Order, AssignmentOutcome, error)
 }
 
 type PostgresRepository struct {
@@ -48,14 +72,18 @@ type PostgresRepository struct {
 	agentsRepo   agents.Repository
 	ordersRepo   orders.Repository
 	trackingRepo tracking.Repository
+	// zonesRepo resolves the pickup area's coordinates for the
+	// distance-based ranking in AutoAssign (see candidate.go). Assign
+	// (manual) never uses it — the admin already picked the agent.
+	zonesRepo zones.Repository
 	// onTransition (M11) is nil-safe — see tracking.TransitionHook's own
 	// doc comment. Wired in by main.go; this package has no dependency
 	// on internal/notifications at all.
 	onTransition tracking.TransitionHook
 }
 
-func NewPostgresRepository(pool *pgxpool.Pool, agentsRepo agents.Repository, ordersRepo orders.Repository, trackingRepo tracking.Repository, onTransition tracking.TransitionHook) *PostgresRepository {
-	return &PostgresRepository{pool: pool, agentsRepo: agentsRepo, ordersRepo: ordersRepo, trackingRepo: trackingRepo, onTransition: onTransition}
+func NewPostgresRepository(pool *pgxpool.Pool, agentsRepo agents.Repository, ordersRepo orders.Repository, trackingRepo tracking.Repository, zonesRepo zones.Repository, onTransition tracking.TransitionHook) *PostgresRepository {
+	return &PostgresRepository{pool: pool, agentsRepo: agentsRepo, ordersRepo: ordersRepo, trackingRepo: trackingRepo, zonesRepo: zonesRepo, onTransition: onTransition}
 }
 
 // assignmentMetadata builds the {"assigned_agent_id": "..."} payload
@@ -130,32 +158,45 @@ func (r *PostgresRepository) Assign(ctx context.Context, orderID, agentID, actor
 }
 
 // AutoAssign performs automatic assignment: read the order (for its
-// pickup zone and a fast, non-authoritative "is this even assignable"
-// check — reusing tracking.IsValidTransition directly, never a
-// reimplementation), fetch every agent, rank with SelectCandidate, then
+// pickup zone/area and a fast, non-authoritative "is this even
+// assignable" check — reusing tracking.IsValidTransition directly,
+// never a reimplementation), resolve the pickup area's coordinates (if
+// any — see zones.Area), fetch every agent, rank with SelectCandidate
+// (real distance when computable, zone-based fallback otherwise), then
 // lock and re-check the top candidate under the lock. If a candidate
 // was raced away (no longer eligible by the time it's locked), the next
 // candidate is tried — never assigning an agent that failed its own
 // eligibility re-check. Everything after the order read happens inside
 // one transaction; the whole operation rolls back on any failure.
-func (r *PostgresRepository) AutoAssign(ctx context.Context, orderID, actorID string, actorRole users.Role) (orders.Order, error) {
+func (r *PostgresRepository) AutoAssign(ctx context.Context, orderID, actorID string, actorRole users.Role) (orders.Order, AssignmentOutcome, error) {
 	order, err := r.ordersRepo.FindOrderByID(ctx, orderID)
 	if err != nil {
 		if errors.Is(err, orders.ErrOrderNotFound) {
-			return orders.Order{}, ErrOrderNotFound
+			return orders.Order{}, AssignmentOutcome{}, ErrOrderNotFound
 		}
-		return orders.Order{}, fmt.Errorf("find order: %w", err)
+		return orders.Order{}, AssignmentOutcome{}, fmt.Errorf("find order: %w", err)
 	}
 	// Fast, non-authoritative fail-fast: reuses M08's own exported pure
 	// function, never a parallel copy of the edge table. The real,
 	// race-safe enforcement still happens inside TransitionTx below.
 	if !tracking.IsValidTransition(tracking.Status(order.Status), tracking.StatusAssigned) {
-		return orders.Order{}, tracking.ErrInvalidTransition
+		return orders.Order{}, AssignmentOutcome{}, tracking.ErrInvalidTransition
+	}
+
+	// The pickup area is a NOT NULL FK on orders (see 0008's migration),
+	// so this can only fail on a genuine infrastructure error — never
+	// "not found". Latitude/Longitude are nil, nil for the (currently
+	// typical) case of an area an admin hasn't set coordinates for yet;
+	// SelectCandidate's ranking simply falls back to zone-based ranking
+	// in that case, exactly as if this were the pre-distance behavior.
+	pickupArea, err := r.zonesRepo.FindAreaByID(ctx, order.PickupAreaID)
+	if err != nil {
+		return orders.Order{}, AssignmentOutcome{}, fmt.Errorf("find pickup area: %w", err)
 	}
 
 	agentRows, err := r.agentsRepo.List(ctx)
 	if err != nil {
-		return orders.Order{}, fmt.Errorf("list agents: %w", err)
+		return orders.Order{}, AssignmentOutcome{}, fmt.Errorf("list agents: %w", err)
 	}
 	pool := make([]Candidate, len(agentRows))
 	for i, a := range agentRows {
@@ -164,20 +205,20 @@ func (r *PostgresRepository) AutoAssign(ctx context.Context, orderID, actorID st
 
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return orders.Order{}, fmt.Errorf("begin auto-assignment transaction: %w", err)
+		return orders.Order{}, AssignmentOutcome{}, fmt.Errorf("begin auto-assignment transaction: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
 
 	remaining := pool
 	for {
-		winner, err := SelectCandidate(remaining, order.PickupZoneID)
+		winner, err := SelectCandidate(remaining, order.PickupZoneID, pickupArea.Latitude, pickupArea.Longitude)
 		if err != nil {
-			return orders.Order{}, err // ErrNoEligibleCandidate
+			return orders.Order{}, AssignmentOutcome{}, err // ErrNoEligibleCandidate
 		}
 
 		locked, err := lockCandidate(ctx, tx, winner.AgentID)
 		if err != nil {
-			return orders.Order{}, err
+			return orders.Order{}, AssignmentOutcome{}, err
 		}
 		if !IsEligible(locked) {
 			// Raced away since the bulk read — drop it and retry with
@@ -189,17 +230,17 @@ func (r *PostgresRepository) AutoAssign(ctx context.Context, orderID, actorID st
 
 		event, err := r.trackingRepo.TransitionTx(ctx, tx, orderID, actorID, actorRole, actorRole, tracking.StatusAssigned, assignmentMetadata(locked.AgentID))
 		if err != nil {
-			return orders.Order{}, mapTrackingError(err)
+			return orders.Order{}, AssignmentOutcome{}, mapTrackingError(err)
 		}
 		if err := writeAssignment(ctx, tx, orderID, locked.AgentID); err != nil {
-			return orders.Order{}, err
+			return orders.Order{}, AssignmentOutcome{}, err
 		}
 		updated, err := loadOrderTx(ctx, tx, orderID)
 		if err != nil {
-			return orders.Order{}, err
+			return orders.Order{}, AssignmentOutcome{}, err
 		}
 		if err := tx.Commit(ctx); err != nil {
-			return orders.Order{}, fmt.Errorf("commit auto-assignment: %w", err)
+			return orders.Order{}, AssignmentOutcome{}, fmt.Errorf("commit auto-assignment: %w", err)
 		}
 
 		// Fires strictly after the transaction above has already
@@ -208,7 +249,15 @@ func (r *PostgresRepository) AutoAssign(ctx context.Context, orderID, actorID st
 			r.onTransition(ctx, event)
 		}
 
-		return updated, nil
+		// locked (not winner) carries the post-lock, re-read coordinates
+		// — building the outcome from it means it always reflects
+		// exactly what was actually assigned, not a pre-lock snapshot.
+		outcome := AssignmentOutcome{Method: AssignmentMethodZone}
+		if d := distanceToPickupKM(locked, pickupArea.Latitude, pickupArea.Longitude); d != nil {
+			outcome = AssignmentOutcome{Method: AssignmentMethodDistance, DistanceKM: d}
+		}
+
+		return updated, outcome, nil
 	}
 }
 
@@ -218,6 +267,8 @@ func toCandidate(a agents.AgentWithUser) Candidate {
 		Active:         a.Active,
 		Availability:   a.Availability,
 		CurrentZoneID:  a.CurrentZoneID,
+		Latitude:       a.CurrentLat,
+		Longitude:      a.CurrentLng,
 		LastAssignedAt: a.LastAssignedAt,
 	}
 }
@@ -242,9 +293,9 @@ func withoutAgent(pool []Candidate, agentID string) []Candidate {
 func lockCandidate(ctx context.Context, tx pgx.Tx, agentID string) (Candidate, error) {
 	var c Candidate
 	err := tx.QueryRow(ctx,
-		`SELECT id, active, availability, current_zone_id, last_assigned_at FROM delivery_agents WHERE id = $1 FOR UPDATE`,
+		`SELECT id, active, availability, current_zone_id, current_lat, current_lng, last_assigned_at FROM delivery_agents WHERE id = $1 FOR UPDATE`,
 		agentID,
-	).Scan(&c.AgentID, &c.Active, &c.Availability, &c.CurrentZoneID, &c.LastAssignedAt)
+	).Scan(&c.AgentID, &c.Active, &c.Availability, &c.CurrentZoneID, &c.Latitude, &c.Longitude, &c.LastAssignedAt)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Candidate{}, ErrAgentNotFound

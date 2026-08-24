@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"lastmiletracker/internal/auth"
+	"lastmiletracker/internal/geo"
 	"lastmiletracker/internal/server"
 	"lastmiletracker/internal/users"
 	"lastmiletracker/internal/zones"
@@ -448,22 +448,14 @@ func UpdateZoneHandler(repo Repository, zonesRepo zones.Repository) http.Handler
 	}
 }
 
+// validateCoordinates requires both latitude and longitude — an agent's
+// location update is always an atomic "both or neither" PUT, unlike an
+// area's optional coordinates (see zones.validateOptionalCoordinates,
+// which delegates to this exact same geo.ValidateCoordinates for the
+// actual range/finite-number rules, so they're defined in one place).
 func validateCoordinates(lat, lng *float64) string {
 	if lat == nil || lng == nil {
 		return "latitude and longitude are both required"
 	}
-	// encoding/json rejects literal NaN/Infinity tokens outright (they
-	// are not valid JSON numbers), but an extreme value like 1e400
-	// decodes to +Inf without a decode error — checked explicitly rather
-	// than relying solely on the range comparison below to catch it.
-	if math.IsNaN(*lat) || math.IsInf(*lat, 0) || math.IsNaN(*lng) || math.IsInf(*lng, 0) {
-		return "latitude and longitude must be finite numbers"
-	}
-	if *lat < -90 || *lat > 90 {
-		return "latitude must be between -90 and 90"
-	}
-	if *lng < -180 || *lng > 180 {
-		return "longitude must be between -180 and 180"
-	}
-	return ""
+	return geo.ValidateCoordinates(*lat, *lng)
 }

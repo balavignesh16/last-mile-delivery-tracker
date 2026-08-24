@@ -126,7 +126,7 @@ func (r *PostgresRepository) UpdateZone(ctx context.Context, id string, update Z
 	return z, nil
 }
 
-const areaColumns = `id, name, zone_id, active, created_at`
+const areaColumns = `id, name, zone_id, active, latitude, longitude, created_at`
 
 // CreateArea maps a foreign-key violation to ErrZoneNotFound as
 // defense-in-depth. CreateAreaHandler already checks the zone exists
@@ -135,8 +135,8 @@ const areaColumns = `id, name, zone_id, active, created_at`
 // from a future module or a test) without relying on that caller-side
 // check.
 func (r *PostgresRepository) CreateArea(ctx context.Context, zoneID string, input CreateAreaInput) (Area, error) {
-	const stmt = `INSERT INTO areas (name, zone_id) VALUES ($1, $2) RETURNING ` + areaColumns
-	a, err := scanArea(r.pool.QueryRow(ctx, stmt, input.Name, zoneID))
+	const stmt = `INSERT INTO areas (name, zone_id, latitude, longitude) VALUES ($1, $2, $3, $4) RETURNING ` + areaColumns
+	a, err := scanArea(r.pool.QueryRow(ctx, stmt, input.Name, zoneID, input.Latitude, input.Longitude))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
@@ -185,15 +185,19 @@ func (r *PostgresRepository) FindAreaByID(ctx context.Context, id string) (Area,
 	return a, nil
 }
 
-// UpdateArea always writes name; active is only overwritten when the
-// caller provided one (Active != nil) — same COALESCE contract as
-// UpdateZone.
+// UpdateArea always writes name; active/latitude/longitude are only
+// overwritten when the caller provided them (non-nil) — same COALESCE
+// "nil means unchanged" contract as UpdateZone.
 func (r *PostgresRepository) UpdateArea(ctx context.Context, areaID string, update AreaUpdate) (Area, error) {
 	const stmt = `
-		UPDATE areas SET name = $1, active = COALESCE($2, active)
-		WHERE id = $3
+		UPDATE areas SET
+			name = $1,
+			active = COALESCE($2, active),
+			latitude = COALESCE($3, latitude),
+			longitude = COALESCE($4, longitude)
+		WHERE id = $5
 		RETURNING ` + areaColumns
-	a, err := scanArea(r.pool.QueryRow(ctx, stmt, update.Name, update.Active, areaID))
+	a, err := scanArea(r.pool.QueryRow(ctx, stmt, update.Name, update.Active, update.Latitude, update.Longitude, areaID))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Area{}, ErrAreaNotFound
@@ -222,6 +226,6 @@ func scanZone(row rowScanner) (Zone, error) {
 
 func scanArea(row rowScanner) (Area, error) {
 	var a Area
-	err := row.Scan(&a.ID, &a.Name, &a.ZoneID, &a.Active, &a.CreatedAt)
+	err := row.Scan(&a.ID, &a.Name, &a.ZoneID, &a.Active, &a.Latitude, &a.Longitude, &a.CreatedAt)
 	return a, err
 }

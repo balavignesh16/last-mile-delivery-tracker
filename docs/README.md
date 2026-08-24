@@ -22,8 +22,10 @@ Written so far:
 - [`zone-management.md`](./zone-management.md) — the zones/areas schema
   and hierarchy, why there's no DELETE, address/area resolution and why
   it isn't geocoding, INTRA/INTER determination, inactive-zone behavior,
-  completing the `delivery_agents.current_zone_id` foreign key, and the
-  read-RBAC widening to `DELIVERY_AGENT` (M04).
+  completing the `delivery_agents.current_zone_id` foreign key, the
+  read-RBAC widening to `DELIVERY_AGENT` (M04), and the post-M04
+  optional area `latitude`/`longitude` coordinates auto-assignment's
+  distance ranking consumes (migration `0016`).
 - [`rate-configuration.md`](./rate-configuration.md) — the rate_cards/
   rate_card_slabs schema, why cards start inactive, flat-per-band
   pricing, the `[min, max)` boundary convention, why slabs (unlike every
@@ -50,7 +52,9 @@ Written so far:
   was deliberately left to M09/M10/M11 (M08).
 - [`assignment-engine.md`](./assignment-engine.md) — the M09 manual and
   automatic assignment endpoints, the eligibility rule and deterministic
-  ranking algorithm (and why no geographic-distance ranking exists), why
+  ranking algorithm — real Haversine distance to the pickup point when
+  both sides have known coordinates (post-M09, migration `0016`),
+  falling back to the original zone-based ranking otherwise — why
   M08's state machine is reused rather than duplicated, the four
   concurrency races and their PostgreSQL-level protection, the
   `orders.assigned_agent_id` schema addition, and the widened

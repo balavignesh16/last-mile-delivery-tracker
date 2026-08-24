@@ -70,13 +70,41 @@ func AssignHandler(repo Repository) http.HandlerFunc {
 	}
 }
 
+// autoAssignResponse embeds the standard order response (unchanged
+// shape from every other order-returning endpoint) and adds one
+// "assignment" object describing how the winning candidate was picked
+// — the useful ranking information section 10 of the feature spec
+// calls for, in this project's existing snake_case convention rather
+// than inventing a new response shape or a second endpoint.
+type autoAssignResponse struct {
+	orders.OrderResponse
+	Assignment assignmentInfo `json:"assignment"`
+}
+
+type assignmentInfo struct {
+	// Method is "DISTANCE" (a real Haversine distance to the pickup
+	// point decided the winner) or "ZONE" (the zone-based fallback did
+	// — no usable coordinate on one or both sides). See
+	// AssignmentOutcome's doc.
+	Method string `json:"method"`
+	// DistanceKM is present only when Method == "DISTANCE".
+	DistanceKM *float64 `json:"distance_km,omitempty"`
+}
+
+func toAutoAssignResponse(o orders.Order, outcome AssignmentOutcome) autoAssignResponse {
+	return autoAssignResponse{
+		OrderResponse: orders.ToOrderResponse(o),
+		Assignment:    assignmentInfo{Method: outcome.Method, DistanceKM: outcome.DistanceKM},
+	}
+}
+
 // AutoAssignHandler handles POST /api/v1/orders/:id/auto-assign (ADMIN
 // only). No client-supplied assignment parameters exist — every input
 // the ranking algorithm needs is already stored on the order itself
-// (pickup zone) or read fresh from the agents table. An empty body is
-// expected; DisallowUnknownFields still applies if one is sent anyway,
-// for the same reason every other endpoint in this project rejects
-// unexpected fields rather than silently ignoring them.
+// (pickup zone/area) or read fresh from the agents table. An empty body
+// is expected; DisallowUnknownFields still applies if one is sent
+// anyway, for the same reason every other endpoint in this project
+// rejects unexpected fields rather than silently ignoring them.
 func AutoAssignHandler(repo Repository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		identity, ok := auth.IdentityFromContext(r.Context())
@@ -95,7 +123,7 @@ func AutoAssignHandler(repo Repository) http.HandlerFunc {
 			return
 		}
 
-		updated, err := repo.AutoAssign(r.Context(), orderID, identity.UserID, identity.Role)
+		updated, outcome, err := repo.AutoAssign(r.Context(), orderID, identity.UserID, identity.Role)
 		if err != nil {
 			if status, message, ok := mapAssignmentError(err); ok {
 				server.WriteError(w, status, message)
@@ -106,7 +134,7 @@ func AutoAssignHandler(repo Repository) http.HandlerFunc {
 			return
 		}
 
-		server.WriteJSON(w, http.StatusOK, orders.ToOrderResponse(updated))
+		server.WriteJSON(w, http.StatusOK, toAutoAssignResponse(updated, outcome))
 	}
 }
 

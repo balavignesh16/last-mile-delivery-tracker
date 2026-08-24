@@ -211,6 +211,53 @@ func TestAutoAssignHandler_AdminHappyPath(t *testing.T) {
 	}
 }
 
+func TestAutoAssignHandler_ResponseIncludesAssignmentOutcome(t *testing.T) {
+	repo := newFakeAssignmentRepo()
+	repo.orders["order-1"] = orders.Order{ID: "order-1", Status: "CREATED"}
+	distance := 2.4
+	repo.autoAssignOutcome = AssignmentOutcome{Method: AssignmentMethodDistance, DistanceKM: &distance}
+
+	rec := doRequest(t, withAuthAndRole(t, "admin-1", users.RoleAdmin, AutoAssignHandler(repo)),
+		http.MethodPost, "/api/v1/orders/order-1/auto-assign", ``, map[string]string{"id": "order-1"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	body := decodeJSON[map[string]any](t, rec)
+	assignment, ok := body["assignment"].(map[string]any)
+	if !ok {
+		t.Fatalf("response has no \"assignment\" object: %v", body)
+	}
+	if assignment["method"] != "DISTANCE" {
+		t.Errorf("assignment.method = %v, want DISTANCE", assignment["method"])
+	}
+	if assignment["distance_km"] != 2.4 {
+		t.Errorf("assignment.distance_km = %v, want 2.4", assignment["distance_km"])
+	}
+}
+
+func TestAutoAssignHandler_ZoneFallbackOmitsDistance(t *testing.T) {
+	repo := newFakeAssignmentRepo()
+	repo.orders["order-1"] = orders.Order{ID: "order-1", Status: "CREATED"}
+	repo.autoAssignOutcome = AssignmentOutcome{Method: AssignmentMethodZone}
+
+	rec := doRequest(t, withAuthAndRole(t, "admin-1", users.RoleAdmin, AutoAssignHandler(repo)),
+		http.MethodPost, "/api/v1/orders/order-1/auto-assign", ``, map[string]string{"id": "order-1"})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	body := decodeJSON[map[string]any](t, rec)
+	assignment, ok := body["assignment"].(map[string]any)
+	if !ok {
+		t.Fatalf("response has no \"assignment\" object: %v", body)
+	}
+	if assignment["method"] != "ZONE" {
+		t.Errorf("assignment.method = %v, want ZONE", assignment["method"])
+	}
+	if _, present := assignment["distance_km"]; present {
+		t.Errorf("assignment.distance_km = %v, want the field omitted entirely for the zone fallback", assignment["distance_km"])
+	}
+}
+
 func TestAutoAssignHandler_CustomerForbidden(t *testing.T) {
 	repo := newFakeAssignmentRepo()
 	rec := doRequest(t, withAuthAndRole(t, "customer-1", users.RoleCustomer, AutoAssignHandler(repo)),

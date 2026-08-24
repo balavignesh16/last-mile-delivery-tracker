@@ -12,8 +12,8 @@ Packages depend downward only (e.g. `orders` calls into `rates`;
 to observe an earlier one without creating a cycle, it does so through a
 small, producer-owned callback type (`TransitionHook`,
 `OrderCreatedHook`) rather than an event bus. No microservices, no
-message queue, no cache layer — every capability is proven independently
-testable through this same discipline instead.
+message queue, no cache layer — every capability is independently
+testable through this same discipline.
 
 ## Rate Calculation Engine
 
@@ -35,11 +35,10 @@ indexes and `SELECT ... FOR UPDATE`, proven under concurrent writes.
 
 An `area` belongs to exactly one `zone`; resolving a pickup/drop area to
 its zone is a single indexed lookup, not geocoding or distance
-estimation — the assignment never asked for real-world coordinates to
-decide routing tier. INTRA/INTER is a direct comparison of the two
-resolved zone ids. An inactive zone is rejected explicitly rather than
-silently priced, since a deactivated zone should never route or price a
-delivery.
+estimation — routing tier never needed real-world coordinates.
+INTRA/INTER is a direct comparison of the two resolved zone ids. An
+inactive zone is rejected explicitly rather than silently priced, since
+a deactivated zone should never route or price a delivery.
 
 ## Order Lifecycle & Immutable Tracking
 
@@ -59,15 +58,17 @@ proven with concurrent goroutines against real Postgres.
 
 Manual assignment lets an admin name an agent directly, subject to an
 eligibility check (active, `AVAILABLE`, has a current zone). Automatic
-assignment ranks every eligible agent deterministically: same-zone
-agents before cross-zone agents, then oldest `last_assigned_at` first,
-with agent UUID as a final tiebreak — pure, side-effect-free ranking
+assignment ranks every eligible agent deterministically: with real
+coordinates on both the agent and the pickup area, Haversine distance
+decides it — nearer wins; otherwise same-zone-before-cross-zone, then
+oldest `last_assigned_at`, then agent UUID. Area coordinates are
+optional, admin-entered, never geocoded or backfilled — a fresh area
+uses the zone fallback until set. Ranking is pure and side-effect-free
 over data already read under lock, so the same inputs always produce
-the same choice. Both paths write through the identical, already-locked
-transition path the state machine itself owns, never a second copy of
-it. A partial unique index guarantees an agent can never hold two
-simultaneously active assignments, even if application logic were
-bypassed.
+the same choice, through the identical, already-locked transition path
+the state machine owns — never a second copy of it. A partial unique
+index guarantees an agent can never hold two simultaneously active
+assignments, even if application logic were bypassed.
 
 ## Failed Delivery, Rescheduling & Notifications
 
@@ -75,26 +76,25 @@ A `FAILED` status is reached through the same state machine, carrying
 an optional failure reason in its event metadata. Because the product
 requires customer-initiated rescheduling but the state machine
 authorizes only `ADMIN` on `FAILED → RESCHEDULED`, the rescheduling
-module authorizes the request itself (ownership or admin) and then
-invokes the transition as a pre-authorized internal call — the real
-actor is still recorded faithfully, and zero lines of the state machine
-changed. The previously assigned agent is freed back to `AVAILABLE`
-inside that same transaction; reassignment is a deliberate, separate
-call into the same assignment path any fresh order uses. All eight
-lifecycle events, including repeated `FAILED` occurrences after a
-reschedule cycle, notify the customer by email (always) and SMS (if a
-phone is on file) as a synchronous, post-commit side effect —
-idempotent per exact tracking-event occurrence, never per event type,
-so a genuine second failure is never mistaken for a duplicate.
+module authorizes the request itself (ownership or admin) and invokes
+the transition as a pre-authorized internal call — the real actor is
+still recorded faithfully, zero lines of the state machine changed. The
+previously assigned agent is freed back to `AVAILABLE` in that same
+transaction; reassignment is a deliberate, separate call into the same
+assignment path any fresh order uses. All eight lifecycle events,
+including repeated `FAILED` occurrences after a reschedule cycle,
+notify the customer by email (always) and SMS (if a phone is on file)
+as a synchronous, post-commit side effect — idempotent per exact
+tracking-event occurrence, never per event type, so a genuine second
+failure is never mistaken for a duplicate.
 
 ## Security & Dashboards
 
 JWT-based auth carries role and identity; every endpoint pairs
 route-level role gating with a handler-level ownership check, and
-mismatched ownership returns 404, never 403, to avoid confirming a
-resource's existence. Client-supplied prices, statuses, and actor ids
-are never trusted — every derived field is computed or read from the
-authenticated identity. The customer, agent, and admin dashboards are a
-thin navigation and read-only composition layer over this same API,
-including admin order filtering and simple status counts — they
-introduce no new backend module, table, or business rule.
+mismatched ownership returns 404, never 403. Client-supplied prices,
+statuses, and actor ids are never trusted — every derived field comes
+from the authenticated identity. The customer, agent, and admin
+dashboards are a thin, read-only layer over this same API, including
+admin order filtering and status counts — no new backend module,
+table, or business rule.
